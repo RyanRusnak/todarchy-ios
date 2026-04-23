@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+
+# Xcode — per-user state, build products
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Xcode — local Swift Package Manager state
+.swiftpm/
+.build/
+
+# Ruby (generate_project.rb deps)
+.bundle/
+vendor/bundle/
+
+# Editor / tooling local state
+.claude/
+.idea/
+.vscode/
+*.swp
+*~
+
+# Design handoff (HTML prototypes, React mocks) — not needed to build
+# the app and may contain unshared personal notes.
+design_handoff_apple_apps/
+
+# OS / backup / temp
+*.log
+*.pid
+*.seed
