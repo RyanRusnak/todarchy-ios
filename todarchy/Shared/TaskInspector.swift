@@ -111,15 +111,72 @@ struct TaskInspectorContent: View {
                 }
             }
             metaRow("context") {
-                if let c = task.ctx {
-                    CtxChip(ctx: c, highlighted: true)
-                } else {
-                    Text("—").font(Typo.mono(12)).foregroundStyle(Theme.fgMute)
+                Menu {
+                    ForEach(TaskContext.allCases) { ctx in
+                        Button {
+                            store.setContext(task.id, ctx: ctx)
+                        } label: {
+                            if task.ctx == ctx {
+                                Label(ctx.rawValue, systemImage: "checkmark")
+                            } else {
+                                Text(ctx.rawValue)
+                            }
+                        }
+                    }
+                    if task.ctx != nil {
+                        Divider()
+                        Button("clear", role: .destructive) {
+                            store.setContext(task.id, ctx: nil)
+                        }
+                    }
+                } label: {
+                    if let c = task.ctx {
+                        CtxChip(ctx: c, highlighted: true)
+                    } else {
+                        Text("none  ▾")
+                            .font(Typo.mono(12))
+                            .foregroundStyle(Theme.fgMute)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.border, lineWidth: 1))
+                    }
                 }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
             }
             metaRow("due") {
-                if let d = task.due { DueChip(due: d) }
-                else { Text("—").font(Typo.mono(12)).foregroundStyle(Theme.fgMute) }
+                Menu {
+                    ForEach(DueBucket.allCases) { bucket in
+                        Button {
+                            store.setDue(task.id, due: bucket)
+                        } label: {
+                            if task.due == bucket {
+                                Label(bucket.label, systemImage: "checkmark")
+                            } else {
+                                Text(bucket.label)
+                            }
+                        }
+                    }
+                    if task.due != nil {
+                        Divider()
+                        Button("clear", role: .destructive) {
+                            store.setDue(task.id, due: nil)
+                        }
+                    }
+                } label: {
+                    if let d = task.due {
+                        DueChip(due: d)
+                    } else {
+                        Text("none  ▾")
+                            .font(Typo.mono(12))
+                            .foregroundStyle(Theme.fgMute)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.border, lineWidth: 1))
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
             }
             if let d = task.deferUntil, d > Date() {
                 metaRow("deferred") {
