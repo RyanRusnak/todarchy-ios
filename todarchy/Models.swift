@@ -202,29 +202,37 @@ struct ProjectItem: Identifiable, Hashable, Codable {
     var icon: String
     var accentHex: UInt32
     var isInbox: Bool = false
+    /// True when this project's tasks live in a separate encrypted file
+    /// (`shared_<id>.automerge.enc`) managed by `PerProjectStore`. The
+    /// main doc keeps only the project's metadata + this flag. Absent /
+    /// false in older docs and on clients that don't implement sharing
+    /// yet, so it's safe to introduce without a migration.
+    var isShared: Bool = false
 
     var accent: Color { Color(hex: accentHex) }
 
-    init(id: String, name: String, icon: String, accent: Color, isInbox: Bool = false) {
+    init(id: String, name: String, icon: String, accent: Color, isInbox: Bool = false, isShared: Bool = false) {
         self.id = id
         self.name = name
         self.icon = icon
         self.accentHex = accent.argbHex
         self.isInbox = isInbox
+        self.isShared = isShared
     }
 
-    init(id: String, name: String, icon: String, accentHex: UInt32, isInbox: Bool = false) {
+    init(id: String, name: String, icon: String, accentHex: UInt32, isInbox: Bool = false, isShared: Bool = false) {
         self.id = id
         self.name = name
         self.icon = icon
         self.accentHex = accentHex
         self.isInbox = isInbox
+        self.isShared = isShared
     }
 
     // MARK: - Codable: linux-compat shape
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, icon, accent, isInbox
+        case id, name, icon, accent, isInbox, isShared
     }
 
     init(from decoder: Decoder) throws {
@@ -243,6 +251,7 @@ struct ProjectItem: Identifiable, Hashable, Codable {
             self.accentHex = 0x7AA2F7
         }
         self.isInbox = try c.decodeIfPresent(Bool.self, forKey: .isInbox) ?? false
+        self.isShared = try c.decodeIfPresent(Bool.self, forKey: .isShared) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -254,6 +263,12 @@ struct ProjectItem: Identifiable, Hashable, Codable {
         let hexStr = String(format: "#%06x", accentHex)
         try c.encode(hexStr, forKey: .accent)
         if isInbox { try c.encode(true, forKey: .isInbox) }
+        // Only emit isShared when true so we don't churn older docs that
+        // never had the field. Linux and other clients that predate this
+        // field just ignore it; they'll see the project record but
+        // (correctly) won't know it's externally stored until they
+        // implement the shared-file path themselves.
+        if isShared { try c.encode(true, forKey: .isShared) }
     }
 }
 

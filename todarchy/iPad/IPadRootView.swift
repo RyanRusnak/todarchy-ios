@@ -89,7 +89,7 @@ private struct IPadSidebar: View {
                     .font(Typo.mono(13))
                     .foregroundStyle(Theme.fgDim)
                 Spacer()
-                if SyncSettings.shared.syncFolderURL != nil {
+                if SyncSettings.shared.mode.kind != .localOnly {
                     Circle().fill(Theme.success).frame(width: 6, height: 6)
                 }
             }
@@ -127,6 +127,13 @@ private struct IPadSidebar: View {
             Text(list.name)
                 .font(Typo.mono(14, weight: active ? .semibold : .regular))
                 .foregroundStyle(active ? Theme.fg : Theme.fgDim)
+
+            if list.isShared {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(list.accent.opacity(0.8))
+                    .accessibilityLabel("Shared project")
+            }
 
             Spacer()
 
@@ -394,7 +401,7 @@ private struct IPadMainView: View {
 
     @ViewBuilder
     private var ipadSyncIndicator: some View {
-        if sync.syncFolderURL == nil {
+        if sync.mode.kind == .localOnly {
             Circle().fill(Theme.fgFaint).frame(width: 5, height: 5)
             Text("local only").font(Typo.mono(10)).foregroundStyle(Theme.fgMute)
         } else if sync.isSyncing {

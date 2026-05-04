@@ -203,6 +203,12 @@ private struct MacSidebar: View {
             Text(list.name)
                 .font(Typo.mono(13, weight: active ? .semibold : .regular))
                 .foregroundStyle(active ? Theme.fg : Theme.fgDim)
+            if list.isShared {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(list.accent.opacity(0.8))
+                    .help("Shared project")
+            }
             Spacer()
             Text("\(store.countOpen(in: list.id))")
                 .font(Typo.mono(11))
@@ -458,6 +464,12 @@ private struct MacMainView: View {
             } else if case .list(let id) = store.activeSelection, let l = store.project(id: id) {
                 Text("~/tasks/").font(Typo.mono(14)).foregroundStyle(Theme.fgMute)
                 Text(l.name).font(Typo.mono(18, weight: .semibold)).foregroundStyle(l.accent)
+                if l.isShared {
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(l.accent.opacity(0.8))
+                        .help("Shared project")
+                }
                 Text("· \(store.countOpen(in: id))").font(Typo.mono(12)).foregroundStyle(Theme.fgFaint)
                 Spacer()
                 HStack(spacing: 8) {

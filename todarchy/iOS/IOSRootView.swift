@@ -158,6 +158,11 @@ private struct IOSHeader: View {
                     Text(currentName)
                         .font(Typo.mono(17, weight: .semibold))
                         .foregroundStyle(currentColor)
+                    if currentIsShared {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(currentColor.opacity(0.8))
+                    }
                     Text("· \(count)")
                         .font(Typo.mono(13))
                         .foregroundStyle(Theme.fgFaint)
@@ -226,6 +231,14 @@ private struct IOSHeader: View {
         }
     }
 
+    private var currentIsShared: Bool {
+        guard store.activeContextFilter == nil else { return false }
+        if case .list(let id) = store.activeSelection {
+            return store.project(id: id)?.isShared == true
+        }
+        return false
+    }
+
     private var count: Int {
         if let ctx = store.activeContextFilter { return store.countOpen(ctx: ctx) }
         switch store.activeSelection {
@@ -281,6 +294,11 @@ private struct IOSListChips: View {
                 Text(list.name)
                     .font(Typo.mono(13))
                     .foregroundStyle(active ? Theme.fg : Theme.fgMute)
+                if list.isShared {
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle((active ? list.accent : Theme.fgMute).opacity(0.85))
+                }
                 Text("\(store.countOpen(in: list.id))")
                     .font(Typo.mono(12))
                     .foregroundStyle(active ? list.accent : Theme.fgFaint)

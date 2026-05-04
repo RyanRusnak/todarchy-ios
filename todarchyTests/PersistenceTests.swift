@@ -119,7 +119,7 @@ final class PersistenceTests: XCTestCase {
 
         // Now delete via the explicit API.
         persistence.saveNow(.init(tasks: [], projects: []),
-                            deletedTaskIds: [t.id])
+                            deletedTaskIds: [t.id: "inbox"])
         XCTAssertFalse(persistence.load()!.tasks.contains { $0.id == t.id })
     }
 

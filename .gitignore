@@ -14,6 +14,10 @@ xcuserdata/
 *.dSYM.zip
 *.dSYM
 
+# Generated Info.plist — written by generate_project.rb so build
+# settings stay the single source of truth.
+todarchy/Info.plist
+
 # Xcode — local Swift Package Manager state
 .swiftpm/
 .build/

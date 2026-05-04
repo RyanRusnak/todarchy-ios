@@ -5,9 +5,69 @@ require 'fileutils'
 ROOT = File.expand_path(File.dirname(__FILE__))
 PROJECT_PATH = File.join(ROOT, 'todarchy.xcodeproj')
 APP_DIR = File.join(ROOT, 'todarchy')
+INFO_PLIST_PATH = File.join(APP_DIR, 'Info.plist')
 
 File.delete(PROJECT_PATH) if File.exist?(PROJECT_PATH) && !File.directory?(PROJECT_PATH)
 FileUtils.rm_rf(PROJECT_PATH) if File.directory?(PROJECT_PATH)
+
+# ---- Info.plist ----
+#
+# We emit the plist from this script so the build settings stay the
+# single source of truth. Can't use `GENERATE_INFOPLIST_FILE=YES`
+# alongside a custom scheme because `CFBundleURLTypes` is an
+# array-of-dicts and the `INFOPLIST_KEY_*` build-setting escape-hatch
+# only supports scalar keys.
+def write_info_plist(path)
+  plist = {
+    'CFBundleDevelopmentRegion'       => '$(DEVELOPMENT_LANGUAGE)',
+    'CFBundleDisplayName'             => 'todarchy',
+    'CFBundleExecutable'              => '$(EXECUTABLE_NAME)',
+    'CFBundleIdentifier'              => '$(PRODUCT_BUNDLE_IDENTIFIER)',
+    'CFBundleInfoDictionaryVersion'   => '6.0',
+    'CFBundleName'                    => '$(PRODUCT_NAME)',
+    'CFBundlePackageType'             => '$(PRODUCT_BUNDLE_PACKAGE_TYPE)',
+    'CFBundleShortVersionString'      => '$(MARKETING_VERSION)',
+    'CFBundleVersion'                 => '$(CURRENT_PROJECT_VERSION)',
+    'LSApplicationCategoryType'       => 'public.app-category.productivity',
+    'NSHumanReadableCopyright'        => 'Copyright 2026 todarchy',
+    'NSMainStoryboardFile'            => '',
+    'NSPrincipalClass'                => 'NSApplication',
+    # Voice task capture (Apple Speech framework, on-device).
+    'NSMicrophoneUsageDescription'    => 'todarchy uses the microphone so you can add tasks by speaking.',
+    'NSSpeechRecognitionUsageDescription' => 'todarchy transcribes your voice on-device to turn it into a task. Audio never leaves your device.',
+    # UI orientation + appearance.
+    'UIStatusBarStyle'                => 'UIStatusBarStyleLightContent',
+    'UIUserInterfaceStyle'            => 'Dark',
+    'UISupportedInterfaceOrientations~iphone' => [
+      'UIInterfaceOrientationPortrait'
+    ],
+    'UISupportedInterfaceOrientations~ipad' => [
+      'UIInterfaceOrientationPortrait',
+      'UIInterfaceOrientationPortraitUpsideDown',
+      'UIInterfaceOrientationLandscapeLeft',
+      'UIInterfaceOrientationLandscapeRight',
+    ],
+    # Auto-generated scene + launch shells (empty dicts produce the
+    # same effect as GENERATE_INFOPLIST_FILE's *_Generation keys).
+    'UIApplicationSceneManifest' => {
+      'UIApplicationSupportsMultipleScenes' => true,
+    },
+    'UILaunchScreen'                  => {},
+    # Custom URL scheme for share-link handoff:
+    #   todarchy://share/<projectId>#k=<base64url-key>
+    # Registered here so the OS routes matching URLs to `onOpenURL`.
+    'CFBundleURLTypes' => [
+      {
+        'CFBundleURLName'   => 'com.todarchy.app.share',
+        'CFBundleURLSchemes' => ['todarchy'],
+        'CFBundleTypeRole'  => 'Editor',
+      },
+    ],
+  }
+  Xcodeproj::Plist.write_to_path(plist, path)
+end
+
+write_info_plist(INFO_PLIST_PATH)
 
 project = Xcodeproj::Project.new(PROJECT_PATH)
 project.root_object.attributes['LastSwiftUpdateCheck'] = '1600'
@@ -77,21 +137,11 @@ common = {
   'ASSETCATALOG_COMPILER_APPICON_NAME' => 'AppIcon',
   'ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME' => 'AccentColor',
   'ENABLE_HARDENED_RUNTIME' => 'YES',
+  # Tests keep auto-generation; the app overrides with INFOPLIST_FILE
+  # below since a hand-written plist is required to register the
+  # custom URL scheme (CFBundleURLTypes is array-of-dicts, which
+  # INFOPLIST_KEY_* can't express).
   'GENERATE_INFOPLIST_FILE' => 'YES',
-  'INFOPLIST_KEY_UIApplicationSceneManifest_Generation' => 'YES',
-  'INFOPLIST_KEY_UILaunchScreen_Generation' => 'YES',
-  'INFOPLIST_KEY_UIStatusBarStyle' => 'UIStatusBarStyleLightContent',
-  'INFOPLIST_KEY_UIUserInterfaceStyle' => 'Dark',
-  'INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone' => 'UIInterfaceOrientationPortrait',
-  'INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad' => 'UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight',
-  'INFOPLIST_KEY_LSApplicationCategoryType' => 'public.app-category.productivity',
-  'INFOPLIST_KEY_NSHumanReadableCopyright' => 'Copyright 2026 todarchy',
-  'INFOPLIST_KEY_CFBundleDisplayName' => 'todarchy',
-  'INFOPLIST_KEY_NSMainStoryboardFile' => '',
-  'INFOPLIST_KEY_NSPrincipalClass' => 'NSApplication',
-  # Voice task capture (Apple Speech framework, on-device).
-  'INFOPLIST_KEY_NSMicrophoneUsageDescription' => 'todarchy uses the microphone so you can add tasks by speaking.',
-  'INFOPLIST_KEY_NSSpeechRecognitionUsageDescription' => 'todarchy transcribes your voice on-device to turn it into a task. Audio never leaves your device.',
   'COMBINE_HIDPI_IMAGES' => 'YES',
   'ENABLE_USER_SCRIPT_SANDBOXING' => 'YES',
   'LD_RUNPATH_SEARCH_PATHS' => '$(inherited) @executable_path/Frameworks @loader_path/Frameworks',
@@ -100,6 +150,9 @@ common = {
 
 target.build_configurations.each do |config|
   config.build_settings.merge!(common)
+  # App target: use the hand-written plist instead of auto-generation.
+  config.build_settings['GENERATE_INFOPLIST_FILE'] = 'NO'
+  config.build_settings['INFOPLIST_FILE'] = 'todarchy/Info.plist'
 end
 
 # Release-only optimizations
@@ -193,22 +246,15 @@ test_common['SUPPORTED_PLATFORMS'] = 'macosx'
 test_common['SDKROOT'] = 'macosx'
 test_common['FRAMEWORK_SEARCH_PATHS'] = '$(inherited) $(DEVELOPER_FRAMEWORKS_DIR)'
 test_common['LD_RUNPATH_SEARCH_PATHS'] = '$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks'
-# Tests only need macOS
+# Tests only need macOS. Plist keys that used to live in `common` now
+# live in the hand-written todarchy/Info.plist, so there's nothing
+# plist-related to delete from test_common any more.
 test_common.delete('TARGETED_DEVICE_FAMILY')
 test_common.delete('IPHONEOS_DEPLOYMENT_TARGET')
 test_common.delete('SUPPORTS_MACCATALYST')
 test_common.delete('SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD')
-test_common.delete('INFOPLIST_KEY_UIApplicationSceneManifest_Generation')
-test_common.delete('INFOPLIST_KEY_UILaunchScreen_Generation')
-test_common.delete('INFOPLIST_KEY_UIStatusBarStyle')
-test_common.delete('INFOPLIST_KEY_UIUserInterfaceStyle')
-test_common.delete('INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone')
-test_common.delete('INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad')
-test_common.delete('INFOPLIST_KEY_LSApplicationCategoryType')
 test_common.delete('CODE_SIGN_IDENTITY[sdk=iphoneos*]')
 test_common.delete('ASSETCATALOG_COMPILER_APPICON_NAME')
-test_common.delete('INFOPLIST_KEY_NSMicrophoneUsageDescription')
-test_common.delete('INFOPLIST_KEY_NSSpeechRecognitionUsageDescription')
 test_common.delete('ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME')
 
 test_target.build_configurations.each do |config|

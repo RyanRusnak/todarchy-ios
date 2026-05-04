@@ -315,7 +315,9 @@ final class AutomergeStore {
             } else {
                 accent = 0x7AA2F7
             }
-            out.append(ProjectItem(id: id, name: name, icon: icon, accentHex: accent))
+            let isShared = (try boolValue(obj: obj, key: "isShared")) ?? false
+            out.append(ProjectItem(id: id, name: name, icon: icon,
+                                    accentHex: accent, isShared: isShared))
         }
         // Deterministic order for the UI — alphabetic by name, inbox-first
         // semantics are handled by TaskStore.allLists.
@@ -327,6 +329,13 @@ final class AutomergeStore {
         try doc.put(obj: obj, key: "name", value: .String(p.name))
         try doc.put(obj: obj, key: "icon", value: .String(p.icon))
         try doc.put(obj: obj, key: "accent", value: .String(String(format: "#%06x", p.accentHex)))
+        if p.isShared {
+            try doc.put(obj: obj, key: "isShared", value: .Boolean(true))
+        } else {
+            // Drop the key when false so docs that never had the field
+            // stay byte-stable.
+            try? doc.delete(obj: obj, key: "isShared")
+        }
     }
 
     // MARK: - Primitive readers
@@ -342,5 +351,10 @@ final class AutomergeStore {
         case let .Scalar(.Uint(v)): return Int64(v)
         default: return nil
         }
+    }
+
+    private func boolValue(obj: ObjId, key: String) throws -> Bool? {
+        if case let .Scalar(.Boolean(v)) = try doc.get(obj: obj, key: key) { return v }
+        return nil
     }
 }

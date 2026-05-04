@@ -45,11 +45,40 @@ final class TaskStorePersistence {
 
     // Pending save state. Accumulated across debounce cycles so a burst of
     // mutations + one delete all end up in the same disk write.
+    //
+    // `pendingTaskDeletes` is `[taskId: listId]` so flushNow can route
+    // each tombstone to the right doc (main vs a shared project's file).
     private var pendingSnapshot: Snapshot?
-    private var pendingTaskDeletes: Set<String> = []
+    private var pendingTaskDeletes: [String: String] = [:]
     private var pendingProjectDeletes: Set<String> = []
 
     var onExternalChange: (() -> Void)?
+
+    /// Installed by SyncSettings so Persistence can open per-project
+    /// encrypted stores for shared projects. `nil` in test setups that
+    /// only care about the main doc path.
+    var sharedProjectManager: SharedProjectManager?
+
+    /// Currently-loaded PerProjectStores, keyed by project id. Opened
+    /// lazily in `refreshSharedStores` when the main doc surfaces an
+    /// `isShared` project and we have the key. Persisted across ticks
+    /// so we don't re-open + re-decrypt on every save.
+    private var sharedStores: [String: PerProjectStore] = [:]
+
+    /// HTTP relay client. `nil` unless the user has picked `.server`
+    /// mode. Installed + torn down by `SyncSettings`. When present,
+    /// Persistence additionally pulls/pushes the main-doc bytes (and
+    /// each shared-project envelope) around local writes.
+    var serverClient: ServerSyncClient?
+
+    /// Server-side id for the main doc. Paired with `serverClient`.
+    var serverMainDocId: String?
+
+    /// 30-second foreground poll timer. Fires `refreshFromDisk` so the
+    /// existing pipeline picks up server changes alongside file
+    /// changes. Started by `setFileURL` when the server client is
+    /// installed; cancelled otherwise.
+    private var serverPollTimer: Timer?
 
     /// iOS security-scope URL. MUST be the exact URL instance that was
     /// granted scope (from `.fileImporter` or `resolvingBookmarkData`), not
@@ -105,17 +134,63 @@ final class TaskStorePersistence {
 
     // MARK: - Load
 
+    /// Returns the UNION of the main doc + all opened shared-project
+    /// stores. From the TaskStore's perspective, this one array is all
+    /// the tasks across every project, regardless of which file they
+    /// physically live in. The `isShared` flag on each project is the
+    /// only signal that distinguishes them, and that carries through
+    /// because we source the project record from the shared file when
+    /// available (it's the authoritative copy).
     func load() -> Snapshot? {
-        onQueue { try? automerge.snapshot() }
+        onQueue {
+            guard var snap = try? automerge.snapshot() else { return nil }
+            refreshSharedStores(mainProjects: snap.projects)
+            for (pid, store) in sharedStores {
+                guard let sharedSnap = try? store.readSnapshot() else { continue }
+                // Replace tasks for this project with the shared file's
+                // copy so a stale entry from the main doc (pre-promotion)
+                // doesn't ghost the real state.
+                snap.tasks.removeAll { $0.list == pid }
+                snap.tasks.append(contentsOf: sharedSnap.tasks)
+                // Prefer the shared file's project metadata — it's what
+                // collaborators edit, so it's authoritative over the
+                // stub in the main doc.
+                if let idx = snap.projects.firstIndex(where: { $0.id == pid }) {
+                    snap.projects[idx] = sharedSnap.project
+                }
+            }
+            return snap
+        }
+    }
+
+    /// Open `PerProjectStore`s for any shared project in the main doc
+    /// that we have a key for but haven't loaded yet. Close stores for
+    /// projects that are no longer shared. Idempotent.
+    private func refreshSharedStores(mainProjects: [ProjectItem]) {
+        guard let manager = sharedProjectManager else { return }
+        let sharedIds = Set(mainProjects.filter { $0.isShared }.map { $0.id })
+
+        // Open new ones.
+        for pid in sharedIds where sharedStores[pid] == nil {
+            if let store = manager.openStore(for: pid) {
+                sharedStores[pid] = store
+            }
+        }
+        // Drop stores whose project is no longer shared / no longer in
+        // the main doc.
+        for pid in sharedStores.keys where !sharedIds.contains(pid) {
+            sharedStores.removeValue(forKey: pid)
+        }
     }
 
     // MARK: - Save
 
-    /// Debounced save. Pass any tasks/projects whose ids were explicitly
-    /// deleted this tick so they produce real CRDT tombstones.
+    /// Debounced save. `deletedTaskIds` is `[taskId: listId]` — the
+    /// listId lets flushNow route each tombstone to either the main
+    /// doc or the matching shared-project file.
     func scheduleSave(
         _ snapshot: Snapshot,
-        deletedTaskIds: Set<String> = [],
+        deletedTaskIds: [String: String] = [:],
         deletedProjectIds: Set<String> = []
     ) {
         // Fire-and-forget onto the serial queue. This is called from the
@@ -125,7 +200,7 @@ final class TaskStorePersistence {
         queue.async { [weak self] in
             guard let self else { return }
             self.pendingSnapshot = snapshot
-            self.pendingTaskDeletes.formUnion(deletedTaskIds)
+            self.pendingTaskDeletes.merge(deletedTaskIds) { _, new in new }
             self.pendingProjectDeletes.formUnion(deletedProjectIds)
             self.saveWork?.cancel()
             let work = DispatchWorkItem { [weak self] in
@@ -139,12 +214,12 @@ final class TaskStorePersistence {
     /// Synchronously flush whatever's pending + the given snapshot.
     func saveNow(
         _ snapshot: Snapshot,
-        deletedTaskIds: Set<String> = [],
+        deletedTaskIds: [String: String] = [:],
         deletedProjectIds: Set<String> = []
     ) {
         onQueue {
             pendingSnapshot = snapshot
-            pendingTaskDeletes.formUnion(deletedTaskIds)
+            pendingTaskDeletes.merge(deletedTaskIds) { _, new in new }
             pendingProjectDeletes.formUnion(deletedProjectIds)
             flushNow()
         }
@@ -161,19 +236,81 @@ final class TaskStorePersistence {
             _ = mergeOrRebuild(onDisk)
         }
 
+        // 1b. In server mode, pull the latest bytes from the relay and
+        //     merge them in. Synchronous on this queue so that the
+        //     upcoming write incorporates peer changes from the server.
+        pullMainFromServerSync()
+
         // 2. Pull in any conflict copies the sync daemon created.
         ingestConflictCopies()
 
-        // 3. Apply our local mutations on top of the merged doc. Each op is
-        //    poison-safe: if the doc is poisoned, rebuild from disk and retry.
-        let taskDeletes = pendingTaskDeletes
+        // 3. Refresh shared-store roster against the latest main-doc
+        //    project list — promotions done this tick will have flipped
+        //    isShared=true on a project, which is our signal to open
+        //    its encrypted store.
+        refreshSharedStores(mainProjects: snap.projects)
+
+        // 4. Pull peer changes into each shared store before we apply
+        //    local mutations, so we're merging into the freshest state.
+        //    Also sweep up any conflict copies the sync daemon left
+        //    behind — same contract as the main-doc ingestion above
+        //    but per-shared-file. In server mode, pull the envelope
+        //    bytes from the relay too.
+        for (pid, store) in sharedStores {
+            _ = store.refreshFromDisk()
+            _ = store.ingestConflictCopies()
+            pullSharedFromServerSync(projectId: pid, store: store)
+        }
+
+        // 5. Split the pending snapshot by destination. A task lives
+        //    in a shared store iff its `list` matches an opened shared
+        //    project id. Everything else is main-doc.
+        let sharedIds = Set(sharedStores.keys)
+        let mainTasks = snap.tasks.filter { !sharedIds.contains($0.list) }
+        let tasksByShared = Dictionary(grouping: snap.tasks.filter { sharedIds.contains($0.list) },
+                                       by: \.list)
+        let mainDeletes = pendingTaskDeletes.filter { !sharedIds.contains($0.value) }.map(\.key)
+        let deletesByShared = Dictionary(grouping: pendingTaskDeletes.filter { sharedIds.contains($0.value) },
+                                         by: \.value)
+            .mapValues { Set($0.map(\.key)) }
         let projectDeletes = pendingProjectDeletes
+
+        // 6. Apply main-doc writes. Same poison-safe retry dance.
+        //    Capture the bytes actually written so we can mirror them
+        //    to the server without re-saving the doc (which would
+        //    produce a different-but-equivalent blob every time).
+        var mainBytesForServer: Data?
         let writeOk = retryOnPoison {
-            try automerge.upsertTasks(snap.tasks)
+            try automerge.upsertTasks(mainTasks)
             try automerge.upsertProjects(snap.projects)
-            for id in taskDeletes { try automerge.deleteTask(id) }
+            for id in mainDeletes { try automerge.deleteTask(id) }
             for id in projectDeletes { try automerge.deleteProject(id) }
-            try writeBytes(automerge.save())
+            let bytes = automerge.save()
+            try writeBytes(bytes)
+            mainBytesForServer = bytes
+        }
+
+        // 7. Apply shared-store writes. Each store is independent;
+        //    failures here don't invalidate main-doc writes.
+        for (pid, store) in sharedStores {
+            guard let project = snap.projects.first(where: { $0.id == pid }) else { continue }
+            let tasks = tasksByShared[pid] ?? []
+            let deletes = deletesByShared[pid] ?? []
+            do {
+                try store.save(.init(tasks: tasks, project: project),
+                               deletedTaskIds: deletes)
+                pushSharedToServer(projectId: pid, fileURL: store.fileURL)
+            } catch {
+                #if DEBUG
+                print("todarchy: shared-store save failed for \(pid): \(error)")
+                #endif
+            }
+        }
+
+        // 7b. Mirror the main doc to the server. Fire-and-forget so the
+        //     persistence queue isn't blocked on the network round-trip.
+        if let bytes = mainBytesForServer {
+            pushMainToServer(bytes)
         }
 
         // Drain the pending buffers regardless of write success — leaving
@@ -191,6 +328,122 @@ final class TaskStorePersistence {
         DispatchQueue.main.async { [weak self] in
             self?.onExternalChange?()
         }
+    }
+
+    // MARK: - Server mirror
+
+    /// Start an async pull of the main doc from the relay. When bytes
+    /// come back we hop back to `queue` to merge them into the live doc
+    /// and notify the UI. Non-blocking — the persistence queue keeps
+    /// processing user mutations while the network round-trip is in
+    /// flight. Safe to call on any thread; no-op outside server mode.
+    ///
+    /// The user's "always overwrite the server" semantics mean we
+    /// don't need to *wait* for a pre-write merge: peer changes are
+    /// picked up on the next poll / refresh and will converge via
+    /// Automerge, since the CRDT makes every pull idempotent.
+    private func pullMainFromServerSync() {
+        guard let client = serverClient, let id = serverMainDocId else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            do {
+                guard let result = try await client.get(id) else { return }
+                self.queue.async { [weak self] in
+                    guard let self else { return }
+                    _ = self.mergeOrRebuild(result.0)
+                    DispatchQueue.main.async {
+                        SyncSettings.shared.markServerHealth(.ok)
+                        self.onExternalChange?()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    SyncSettings.shared.markServerHealth(.failing(error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    /// Async pull of a shared-project envelope. Mirror of
+    /// `pullMainFromServerSync`. Merging hops back onto `queue` so all
+    /// Automerge operations stay single-threaded.
+    private func pullSharedFromServerSync(projectId: String, store: PerProjectStore) {
+        guard let client = serverClient else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            do {
+                guard let result = try await client.get(projectId) else { return }
+                self.queue.async { [weak self] in
+                    guard let self else { return }
+                    _ = store.merge(encryptedBytes: result.0)
+                    DispatchQueue.main.async {
+                        self.onExternalChange?()
+                    }
+                }
+            } catch {
+                #if DEBUG
+                print("todarchy: server GET \(projectId) failed: \(error.localizedDescription)")
+                #endif
+            }
+        }
+    }
+
+    /// Push the given main-doc bytes to the relay. Unconditional PUT —
+    /// the app is local-first, so we never surrender a write on 412.
+    /// Fire-and-forget: we do not block the persistence queue on the
+    /// network round-trip. Errors surface on `SyncSettings.serverHealth`.
+    private func pushMainToServer(_ bytes: Data) {
+        guard let client = serverClient, let id = serverMainDocId else { return }
+        Task.detached(priority: .utility) {
+            do {
+                _ = try await client.put(id, bytes)
+                await MainActor.run {
+                    SyncSettings.shared.markServerHealth(.ok)
+                }
+            } catch {
+                await MainActor.run {
+                    SyncSettings.shared.markServerHealth(.failing(error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    /// Push a shared-project envelope (read from its local cache file)
+    /// to the relay. Same unconditional semantics as `pushMainToServer`.
+    private func pushSharedToServer(projectId: String, fileURL: URL) {
+        guard let client = serverClient else { return }
+        guard let bytes = try? Data(contentsOf: fileURL) else { return }
+        Task.detached(priority: .utility) {
+            do {
+                _ = try await client.put(projectId, bytes)
+            } catch {
+                #if DEBUG
+                print("todarchy: server PUT \(projectId) failed: \(error.localizedDescription)")
+                #endif
+            }
+        }
+    }
+
+    /// Start the foreground 30s poll that pulls from the server at a
+    /// steady cadence while the app is active. Idempotent; safe to call
+    /// whenever the server client is installed.
+    private func startServerPollTimer() {
+        stopServerPollTimer()
+        guard serverClient != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let t = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+                self?.refreshFromDisk()
+            }
+            // Keep firing while the run loop is busy with UI events.
+            RunLoop.main.add(t, forMode: .common)
+            self.serverPollTimer = t
+        }
+    }
+
+    private func stopServerPollTimer() {
+        serverPollTimer?.invalidate()
+        serverPollTimer = nil
     }
 
     /// Scan the canonical file's directory for sibling `*.automerge` files
@@ -221,15 +474,41 @@ final class TaskStorePersistence {
     /// Force a re-read of the canonical file and merge into the live doc.
     /// Called on iOS when the app returns to the foreground (since
     /// DispatchSourceFileSystemObject doesn't fire for daemon-driven changes
-    /// on iOS) and as a manual "Refresh" affordance.
+    /// on iOS), as a manual "Refresh" affordance, and by the server poll
+    /// timer every 30 seconds when in server mode.
     func refreshFromDisk() {
         onQueue {
-            guard FileManager.default.fileExists(atPath: fileURL.path),
-                  let bytes = readBytes(from: fileURL) else { return }
-            _ = mergeOrRebuild(bytes)
+            // Pull from the server first so disk + server state reconcile
+            // in one merge pass.
+            pullMainFromServerSync()
+            if FileManager.default.fileExists(atPath: fileURL.path),
+               let bytes = readBytes(from: fileURL) {
+                _ = mergeOrRebuild(bytes)
+            }
             ingestConflictCopies()
+
+            // Now that the main doc is current, open any newly shared
+            // projects and pull each store's envelope bytes from both
+            // disk and the server.
+            if let snap = try? automerge.snapshot() {
+                refreshSharedStores(mainProjects: snap.projects)
+            }
+            for (pid, store) in sharedStores {
+                _ = store.refreshFromDisk()
+                _ = store.ingestConflictCopies()
+                pullSharedFromServerSync(projectId: pid, store: store)
+            }
+
             // Always write back — this resolves conflict copies on disk.
-            _ = retryOnPoison { try writeBytes(automerge.save()) }
+            var mainBytesForServer: Data?
+            _ = retryOnPoison {
+                let b = automerge.save()
+                try writeBytes(b)
+                mainBytesForServer = b
+            }
+            if let b = mainBytesForServer {
+                pushMainToServer(b)
+            }
             DispatchQueue.main.async { [weak self] in
                 self?.onExternalChange?()
             }
@@ -306,7 +585,34 @@ final class TaskStorePersistence {
             if pendingSnapshot != nil {
                 flushNow()
             }
+            // Server-mode pull before we inspect the local file — if the
+            // user just enabled server mode we may not have any local
+            // file yet, but remote state should still come through.
+            pullMainFromServerSync()
+            for (pid, store) in sharedStores {
+                _ = store.refreshFromDisk()
+                pullSharedFromServerSync(projectId: pid, store: store)
+            }
             guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                // With server mode active, we may have merged remote bytes
+                // but have no local file yet — write one now so subsequent
+                // reads find something.
+                if serverClient != nil {
+                    var bytesForServer: Data?
+                    let wrote = retryOnPoison {
+                        let b = automerge.save()
+                        try writeBytes(b)
+                        bytesForServer = b
+                    }
+                    if wrote, let b = bytesForServer {
+                        pushMainToServer(b)
+                        let count = (try? automerge.snapshot().tasks.count) ?? 0
+                        DispatchQueue.main.async { [weak self] in
+                            self?.onExternalChange?()
+                        }
+                        return .init(success: true, taskCount: count, message: nil)
+                    }
+                }
                 return .init(success: false, taskCount: nil,
                              message: "Sync file doesn't exist yet at \(fileURL.lastPathComponent)")
             }
@@ -328,12 +634,18 @@ final class TaskStorePersistence {
             }
             _ = mergeOrRebuild(bytes)
             ingestConflictCopies()
+            var bytesForServer: Data?
             let writeOk = retryOnPoison {
-                try writeBytes(automerge.save())
+                let b = automerge.save()
+                try writeBytes(b)
+                bytesForServer = b
             }
             if !writeOk {
                 return .init(success: false, taskCount: nil,
                              message: "Sync folder wasn't writable. Try Stop + Pick again.")
+            }
+            if let b = bytesForServer {
+                pushMainToServer(b)
             }
             let count = (try? automerge.snapshot().tasks.count) ?? 0
             DispatchQueue.main.async { [weak self] in
@@ -513,10 +825,27 @@ final class TaskStorePersistence {
                 }
             }
             self.fileURL = newURL
+            var bytesForServer: Data?
             if !replaceLocalDoc {
-                _ = retryOnPoison { try writeBytes(automerge.save()) }
+                _ = retryOnPoison {
+                    let b = automerge.save()
+                    try writeBytes(b)
+                    bytesForServer = b
+                }
+            }
+            // If we just switched into a server-backed mode, mirror our
+            // current local bytes to the relay so the remote catches up
+            // to the state we're carrying forward.
+            if !replaceLocalDoc, let b = bytesForServer {
+                pushMainToServer(b)
             }
             startWatching()
+            // Keep the poll timer in sync with the server-client presence.
+            if serverClient != nil {
+                startServerPollTimer()
+            } else {
+                stopServerPollTimer()
+            }
             DispatchQueue.main.async { [weak self] in
                 self?.onExternalChange?()
             }
@@ -531,5 +860,8 @@ final class TaskStorePersistence {
         var projects: [ProjectItem]
     }
 
-    deinit { stopWatching() }
+    deinit {
+        stopWatching()
+        serverPollTimer?.invalidate()
+    }
 }

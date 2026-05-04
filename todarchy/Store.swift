@@ -95,7 +95,13 @@ final class TaskStore: ObservableObject {
     // Explicit-delete buffers. Populated by `delete(_:)` /
     // `deleteProject(id:)` and drained on the next save so the on-disk
     // Automerge doc records a real tombstone for the key.
-    private var pendingTaskDeletes: Set<String> = []
+    //
+    // `pendingTaskDeletes` is keyed by taskId → listId because the
+    // persistence layer needs to know WHICH doc (main vs a shared
+    // project's file) should receive the tombstone. We capture listId
+    // at delete-time since the task is about to be removed from
+    // `tasks` and we'd lose that mapping otherwise.
+    private var pendingTaskDeletes: [String: String] = [:]
     private var pendingProjectDeletes: Set<String> = []
 
     private func scheduleSave() {
@@ -112,8 +118,12 @@ final class TaskStore: ObservableObject {
     }
 
     /// Record that a task id was explicitly deleted, so the next save will
-    /// tombstone it in the Automerge doc.
-    func markTaskDeleted(_ id: String) { pendingTaskDeletes.insert(id) }
+    /// tombstone it in the right Automerge doc. Looks up the task's
+    /// current listId so persistence can route to main vs a shared file.
+    func markTaskDeleted(_ id: String) {
+        let listId = tasks.first(where: { $0.id == id })?.list ?? ""
+        pendingTaskDeletes[id] = listId
+    }
 
     /// Record that a project id was explicitly deleted.
     func markProjectDeleted(_ id: String) { pendingProjectDeletes.insert(id) }
@@ -364,6 +374,129 @@ final class TaskStore: ObservableObject {
         if case .list(let sel) = activeSelection, sel == id {
             activeSelection = .list("inbox")
         }
+    }
+
+    // MARK: - Sharing
+
+    enum ShareError: Error, LocalizedError, Equatable {
+        case projectNotFound
+        case inboxNotShareable
+        case alreadyShared
+        case noSyncFolder
+        case invalidLink(String)
+        case keyPersistenceFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .projectNotFound: return "Project not found."
+            case .inboxNotShareable: return "The inbox can't be shared."
+            case .alreadyShared: return "This project is already shared."
+            case .noSyncFolder: return "Pick a sync folder in Settings before sharing."
+            case .invalidLink(let why): return "That share link isn't valid: \(why)"
+            case .keyPersistenceFailed(let why): return "Couldn't save the share key: \(why)"
+            }
+        }
+    }
+
+    /// Promote a local project to a shared (encrypted, multi-user)
+    /// project. Generates a fresh symmetric key, moves the project's
+    /// tasks into a separate encrypted file in the sync folder, and
+    /// leaves the project record in the main doc with `isShared = true`.
+    ///
+    /// Returns the share-link URL the user can send to collaborators.
+    /// The key is already in the key store at this point; the link
+    /// carries the key in its fragment so collaborators can join.
+    ///
+    /// Phase 3b scope: this only handles the *promotion* path. Ongoing
+    /// read/write routing to the shared file comes in Phase 3c; until
+    /// then, a promoted project's tasks vanish from the main TaskStore
+    /// snapshot until they're re-loaded through that path.
+    @discardableResult
+    func promoteToShared(_ projectId: String, manager: SharedProjectManager) throws -> URL {
+        guard let project = projects.first(where: { $0.id == projectId }) else {
+            throw ShareError.projectNotFound
+        }
+        guard !project.isInbox else { throw ShareError.inboxNotShareable }
+        guard !project.isShared else { throw ShareError.alreadyShared }
+
+        let projectTasks = tasks.filter { $0.list == projectId }
+        let created = try manager.createShared(project: project, tasks: projectTasks)
+
+        // Local main-doc cleanup: flag the project shared, tombstone
+        // its tasks so the main doc no longer carries them. Snapshot
+        // first so the whole promotion is one undo unit.
+        snapshot()
+        if let idx = projects.firstIndex(where: { $0.id == projectId }) {
+            projects[idx].isShared = true
+        }
+        for t in projectTasks { markTaskDeleted(t.id) }
+        tasks.removeAll { $0.list == projectId }
+
+        return ShareLink.encode(projectId: projectId, key: created.key)
+    }
+
+    /// Accept an incoming `todarchy://share/...` link: persist the key
+    /// locally, then add a stub project to the main doc flagged
+    /// `isShared = true`. The persistence layer's `refreshSharedStores`
+    /// sees the stub on the next tick and opens a `PerProjectStore`
+    /// against the encrypted file, which sync has (or will) deliver.
+    ///
+    /// Idempotent: if we've already joined this project (key in store +
+    /// project in our list), this is a no-op success.
+    @discardableResult
+    func acceptShareLink(_ url: URL, manager: SharedProjectManager) throws -> ProjectItem {
+        let payload: ShareLink.Payload
+        switch ShareLink.decode(url) {
+        case .success(let p): payload = p
+        case .failure(let e): throw ShareError.invalidLink(e.localizedDescription)
+        }
+        return try acceptPayload(payload, manager: manager)
+    }
+
+    /// Internal path used by both `acceptShareLink` and any caller that
+    /// already has a decoded payload (e.g. pasted text UIs).
+    @discardableResult
+    func acceptPayload(_ payload: ShareLink.Payload,
+                       manager: SharedProjectManager) throws -> ProjectItem {
+        // Persist key + prepare a store handle. The file itself might
+        // not be on disk yet — Dropbox may still be downloading — but
+        // accept() doesn't require it.
+        let store: PerProjectStore
+        do {
+            store = try manager.accept(payload: payload)
+        } catch {
+            throw ShareError.keyPersistenceFailed(error.localizedDescription)
+        }
+
+        // If the encrypted file already landed, pull the real project
+        // metadata from it. Otherwise stub a placeholder; the shared
+        // file's own ProjectItem will overwrite ours once it arrives
+        // (Persistence.load prefers the shared-file copy over the
+        // main-doc stub).
+        if let existingIdx = projects.firstIndex(where: { $0.id == payload.projectId }) {
+            // Already in our list — make sure the shared flag is set.
+            if !projects[existingIdx].isShared {
+                projects[existingIdx].isShared = true
+            }
+            return projects[existingIdx]
+        }
+
+        let project: ProjectItem
+        if let snap = try? store.readSnapshot() {
+            var p = snap.project
+            p.isShared = true
+            project = p
+        } else {
+            project = ProjectItem(
+                id: payload.projectId,
+                name: "shared project",
+                icon: "person.2.fill",
+                accent: Theme.accent2,
+                isShared: true
+            )
+        }
+        projects.append(project)
+        return project
     }
 
     // MARK: - Sort

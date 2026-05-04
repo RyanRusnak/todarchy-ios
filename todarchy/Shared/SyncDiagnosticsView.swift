@@ -26,7 +26,15 @@ struct SyncDiagnosticsView: View {
                 row("projects in memory", "\(projectCount)")
 
                 sectionHeader("SYNC STATUS")
-                row("folder", settings.syncFolderURL?.path ?? "(none — local only)")
+                row("mode", modeLabel)
+                if case .folder(let url) = settings.mode {
+                    row("folder", url.path)
+                }
+                if case .server(let cfg) = settings.mode {
+                    row("server url", cfg.baseURL.absoluteString)
+                    row("server id", cfg.mainDocId)
+                    row("server health", healthLabel)
+                }
                 row("last merged", settings.lastMergedAt?.formatted() ?? "never")
                 row("last error", settings.lastSyncError ?? "—")
                 row("currently syncing", settings.isSyncing ? "yes" : "no")
@@ -69,6 +77,22 @@ struct SyncDiagnosticsView: View {
         if delta < 3600 { return "\(Int(delta / 60))m ago (\(date.formatted(date: .omitted, time: .standard)))" }
         if delta < 86400 { return "\(Int(delta / 3600))h ago (\(date.formatted(date: .abbreviated, time: .shortened)))" }
         return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private var modeLabel: String {
+        switch settings.mode {
+        case .localOnly: return "local only"
+        case .folder:    return "folder"
+        case .server:    return "server"
+        }
+    }
+
+    private var healthLabel: String {
+        switch settings.serverHealth {
+        case .unknown: return "unknown"
+        case .ok:      return "ok"
+        case .failing(let m): return "failing — \(m)"
+        }
     }
 
     private var taskCount: Int {

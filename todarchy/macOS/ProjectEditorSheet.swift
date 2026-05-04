@@ -6,10 +6,17 @@ struct ProjectEditorSheet: View {
     @EnvironmentObject var store: TaskStore
     let onClose: () -> Void
 
+    @ObservedObject var syncSettings = SyncSettings.shared
     @State private var editingId: String?
     @State private var editBuffer: String = ""
     @State private var pendingDelete: ProjectItem?
     @FocusState private var editFieldFocus: Bool
+    /// id of the project whose share-link was just copied. Drives the
+    /// brief "copied ✓" affordance on its row.
+    @State private var lastCopiedId: String?
+    /// Transient error surfaced after a failed promotion (no sync
+    /// folder, key persistence failed, etc.). Cleared on next action.
+    @State private var shareError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -33,6 +40,24 @@ struct ProjectEditorSheet: View {
             .padding(.bottom, 12)
 
             Divider().background(Theme.border)
+
+            if let message = shareError {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Theme.danger)
+                    Text(message)
+                        .font(Typo.mono(11))
+                        .foregroundStyle(Theme.fgDim)
+                    Spacer()
+                    Button("dismiss") { shareError = nil }
+                        .buttonStyle(.plain)
+                        .font(Typo.mono(10))
+                        .foregroundStyle(Theme.fgMute)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 8)
+                .background(Theme.danger.opacity(0.08))
+            }
 
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -127,6 +152,8 @@ struct ProjectEditorSheet: View {
             }
             .buttonStyle(.plain)
 
+            shareButton(for: project)
+
             Button(role: .destructive) {
                 pendingDelete = project
             } label: {
@@ -175,6 +202,75 @@ struct ProjectEditorSheet: View {
             store.deleteProject(id: id)
         }
         editingId = nil
+    }
+
+    // MARK: - Share
+
+    @ViewBuilder
+    private func shareButton(for project: ProjectItem) -> some View {
+        let copied = lastCopiedId == project.id
+        let disabled = syncSettings.sharedProjectManager == nil || project.isInbox
+        Button {
+            handleShareTap(project)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: copied ? "checkmark"
+                                         : (project.isShared ? "person.2.fill" : "person.crop.circle.badge.plus"))
+                Text(copied ? "copied"
+                            : (project.isShared ? "link" : "share"))
+                    .font(Typo.mono(11, weight: .semibold))
+            }
+            .foregroundStyle(copied ? Theme.success
+                                     : (project.isShared ? Theme.accent : Theme.fgMute))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.35 : 1.0)
+        .help(disabled ? "Pick a sync folder in Settings → Sync to share."
+                       : (project.isShared ? "Copy share link to clipboard"
+                                            : "Generate a share link for this project"))
+    }
+
+    private func handleShareTap(_ project: ProjectItem) {
+        guard let manager = syncSettings.sharedProjectManager else {
+            shareError = "Pick a sync folder in Settings → Sync first."
+            return
+        }
+        shareError = nil
+        do {
+            let url: URL
+            if project.isShared {
+                // Already shared — re-read the key and regenerate the
+                // link. Handy for sending it to another collaborator
+                // later, or re-copying after closing the clipboard.
+                guard let key = syncSettings.keyStore.load(for: project.id) else {
+                    shareError = "This project is flagged shared but we don't have its key on this device."
+                    return
+                }
+                url = ShareLink.encode(projectId: project.id, key: key)
+            } else {
+                url = try store.promoteToShared(project.id, manager: manager)
+            }
+            copyToClipboard(url.absoluteString)
+            flashCopied(for: project.id)
+        } catch let err as TaskStore.ShareError {
+            shareError = err.errorDescription ?? "Couldn't share this project."
+        } catch {
+            shareError = error.localizedDescription
+        }
+    }
+
+    private func copyToClipboard(_ string: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(string, forType: .string)
+    }
+
+    private func flashCopied(for id: String) {
+        lastCopiedId = id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            if lastCopiedId == id { lastCopiedId = nil }
+        }
     }
 }
 

@@ -28,6 +28,7 @@ struct TodarchyApp: App {
                 .onChange(of: themeName) { _, name in
                     ThemePalette.current = ThemePalette.named(name)
                 }
+                .onOpenURL { url in handleIncomingURL(url) }
                 .task {
                     DeferNotifier.shared.attach(store: store)
                     DeferNotifier.shared.start()
@@ -84,8 +85,41 @@ struct TodarchyApp: App {
                         TaskStorePersistence.shared.refreshFromDisk()
                     }
                 }
+                .onOpenURL { url in handleIncomingURL(url) }
         }
         #endif
+    }
+
+    /// Dispatch incoming `todarchy://…` URLs to the right handler. Right
+    /// now the only scheme path is `share/`, but we branch on it so new
+    /// URL types (e.g. a future `project/`) plug in cleanly.
+    @MainActor
+    private func handleIncomingURL(_ url: URL) {
+        guard url.scheme == ShareLink.scheme else { return }
+        if url.host == "share" {
+            acceptShareLink(url)
+        }
+    }
+
+    @MainActor
+    private func acceptShareLink(_ url: URL) {
+        guard let manager = SyncSettings.shared.sharedProjectManager else {
+            #if DEBUG
+            print("todarchy: share link opened before a sync folder was configured — ignoring")
+            #endif
+            return
+        }
+        do {
+            let project = try store.acceptShareLink(url, manager: manager)
+            // Jump to the newly-joined project so the user sees their
+            // collaborator's tasks immediately.
+            store.activeSelection = .list(project.id)
+            store.activeContextFilter = nil
+        } catch {
+            #if DEBUG
+            print("todarchy: couldn't accept share link: \(error.localizedDescription)")
+            #endif
+        }
     }
 }
 

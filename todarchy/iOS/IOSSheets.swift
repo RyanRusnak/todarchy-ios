@@ -1,14 +1,18 @@
 #if !os(macOS)
 import SwiftUI
+import UIKit
 
 // MARK: - List switcher
 
 struct ListSwitcherSheet: View {
     @EnvironmentObject var store: TaskStore
+    @ObservedObject var syncSettings = SyncSettings.shared
     @State private var search = ""
     @State private var pendingNameProjectId: String?
     @State private var nameBuffer: String = ""
     @FocusState private var nameFieldFocused: Bool
+    /// Transient banner at the top of the sheet for share outcomes.
+    @State private var shareBanner: (text: String, isError: Bool)?
     let onClose: () -> Void
     var onRequestSettings: () -> Void = {}
 
@@ -28,6 +32,25 @@ struct ListSwitcherSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 16)
             .padding(.top, 16)
+
+            if let banner = shareBanner {
+                HStack(spacing: 8) {
+                    Image(systemName: banner.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(banner.isError ? Theme.danger : Theme.success)
+                    Text(banner.text)
+                        .font(Typo.mono(12))
+                        .foregroundStyle(Theme.fg)
+                        .lineLimit(2)
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background((banner.isError ? Theme.danger : Theme.success).opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
 
             Text("LISTS")
                 .font(Typo.mono(10, weight: .semibold))
@@ -96,7 +119,7 @@ struct ListSwitcherSheet: View {
                                 .font(Typo.mono(14))
                                 .foregroundStyle(Theme.fgDim)
                             Spacer()
-                            if SyncSettings.shared.syncFolderURL != nil {
+                            if SyncSettings.shared.mode.kind != .localOnly {
                                 Circle().fill(Theme.success).frame(width: 6, height: 6)
                             }
                             Image(systemName: "chevron.right")
@@ -157,6 +180,13 @@ struct ListSwitcherSheet: View {
                 .font(Typo.mono(15, weight: active ? .semibold : .regular))
                 .foregroundStyle(active ? Theme.fg : Theme.fgDim)
 
+            if list.isShared {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(list.accent.opacity(0.8))
+                    .accessibilityLabel("Shared project")
+            }
+
             Spacer()
 
             Text("\(store.countOpen(in: list.id))")
@@ -174,6 +204,66 @@ struct ListSwitcherSheet: View {
             store.activeSelection = .list(list.id)
             store.activeContextFilter = nil
             onClose()
+        }
+        .contextMenu {
+            if list.isInbox {
+                // Inbox can't be shared; keep the menu empty so the
+                // long-press doesn't imply an action that won't work.
+            } else if list.isShared {
+                Button {
+                    handleShareTap(list)
+                } label: {
+                    Label("Copy share link", systemImage: "link")
+                }
+            } else {
+                Button {
+                    handleShareTap(list)
+                } label: {
+                    Label("Share…", systemImage: "person.crop.circle.badge.plus")
+                }
+            }
+        }
+    }
+
+    // MARK: - Share
+
+    private func handleShareTap(_ project: ProjectItem) {
+        guard let manager = syncSettings.sharedProjectManager else {
+            flashBanner("Pick a sync folder in Settings first.", isError: true)
+            return
+        }
+        do {
+            let url: URL
+            if project.isShared {
+                guard let key = syncSettings.keyStore.load(for: project.id) else {
+                    flashBanner("This project is flagged shared but we don't have its key on this device.",
+                                isError: true)
+                    return
+                }
+                url = ShareLink.encode(projectId: project.id, key: key)
+            } else {
+                url = try store.promoteToShared(project.id, manager: manager)
+            }
+            UIPasteboard.general.string = url.absoluteString
+            flashBanner(project.isShared ? "Link copied. Send it to a collaborator."
+                                         : "Shared — link copied to clipboard.",
+                        isError: false)
+        } catch let err as TaskStore.ShareError {
+            flashBanner(err.errorDescription ?? "Couldn't share this project.", isError: true)
+        } catch {
+            flashBanner(error.localizedDescription, isError: true)
+        }
+    }
+
+    private func flashBanner(_ text: String, isError: Bool) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            shareBanner = (text, isError)
+        }
+        let target = shareBanner
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            if shareBanner?.text == target?.text {
+                withAnimation(.easeInOut(duration: 0.18)) { shareBanner = nil }
+            }
         }
     }
 }

@@ -48,7 +48,7 @@ struct MacStatusBar: View {
 
     @ViewBuilder
     private var syncIndicator: some View {
-        if sync.syncFolderURL == nil {
+        if sync.mode.kind == .localOnly {
             Circle().fill(Theme.fgFaint).frame(width: 6, height: 6)
             Text("local only").font(Typo.mono(11)).foregroundStyle(Theme.fgMute)
         } else if sync.isSyncing {

@@ -12,7 +12,7 @@ struct IOSSyncHeaderIndicator: View {
     private enum Kind { case localOnly, syncing, error, synced }
 
     private var kind: Kind {
-        if sync.syncFolderURL == nil { return .localOnly }
+        if sync.mode.kind == .localOnly { return .localOnly }
         if sync.isSyncing { return .syncing }
         if sync.lastSyncError != nil { return .error }
         return .synced
@@ -96,7 +96,7 @@ struct IOSSyncStatusBar: View {
 
     @ViewBuilder
     private var leadIndicator: some View {
-        if sync.syncFolderURL == nil {
+        if sync.mode.kind == .localOnly {
             Circle().fill(Theme.fgFaint).frame(width: 6, height: 6)
         } else if sync.isSyncing {
             ProgressView().controlSize(.mini).tint(Theme.accent)
@@ -109,7 +109,7 @@ struct IOSSyncStatusBar: View {
 
     @ViewBuilder
     private var mainLabel: some View {
-        if sync.syncFolderURL == nil {
+        if sync.mode.kind == .localOnly {
             Text("local only").foregroundStyle(Theme.fgMute)
         } else if sync.isSyncing {
             Text("syncing…").foregroundStyle(Theme.accent)
@@ -125,7 +125,7 @@ struct IOSSyncStatusBar: View {
 
     @ViewBuilder
     private var trailLabel: some View {
-        if sync.syncFolderURL != nil {
+        if sync.mode.kind != .localOnly {
             HStack(spacing: 4) {
                 if let ts = sync.lastMergedAt {
                     Text(relative(ts))

@@ -1,6 +1,7 @@
 #if !os(macOS)
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
 
 /// iOS/iPadOS settings sheet. Reached via the "Settings" button in the list-
 /// switcher footer (iPhone) or from the iPad sidebar.
@@ -10,6 +11,14 @@ struct IOSSettingsSheet: View {
     let onClose: () -> Void
 
     @State private var showPicker = false
+    @State private var serverURLText: String = "https://todarchy-ryanrusnak.fly.dev"
+    @State private var serverIdText: String = ""
+    @State private var serverUrlError: String?
+    @State private var serverIdError: String?
+    @State private var healthCheck: String?
+    /// Staged picker selection — separate from `settings.mode` so
+    /// tapping "Server" reveals the config form before Connect fires.
+    @State private var stagedKind: SyncMode.Kind = .localOnly
     @AppStorage("theme.name") private var themeName: String = ThemePalette.tokyoNight.id
 
     var body: some View {
@@ -41,6 +50,13 @@ struct IOSSettingsSheet: View {
                 settings.setFolder(url, persistence: persistence)
             }
         }
+        .onAppear {
+            stagedKind = settings.mode.kind
+            hydrateServerFields()
+        }
+        .onChange(of: settings.mode) { _, newMode in
+            stagedKind = newMode.kind
+        }
     }
 
     // MARK: - Sections
@@ -48,6 +64,17 @@ struct IOSSettingsSheet: View {
     private var syncSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader("SYNC")
+
+            Picker("Sync via", selection: $stagedKind) {
+                Text("Off").tag(SyncMode.Kind.localOnly)
+                Text("Folder").tag(SyncMode.Kind.folder)
+                Text("Server").tag(SyncMode.Kind.server)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: stagedKind) { _, newKind in
+                applyMode(kind: newKind)
+            }
+
             SyncStatusBlock(settings: settings)
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -55,41 +82,35 @@ struct IOSSettingsSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
 
-            HStack(spacing: 10) {
-                Button {
-                    showPicker = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "folder.badge.plus")
-                        Text(settings.syncFolderURL == nil
-                             ? "Pick sync folder…"
-                             : "Change folder…")
-                            .font(Typo.mono(13, weight: .semibold))
-                    }
-                    .foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent.opacity(0.5), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-
-                if settings.syncFolderURL != nil {
-                    Button {
-                        settings.clearFolder(persistence)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "xmark.circle")
-                            Text("Stop syncing")
-                                .font(Typo.mono(13))
-                        }
-                        .foregroundStyle(Theme.danger)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.danger.opacity(0.5), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                }
+            switch stagedKind {
+            case .folder: folderControls
+            case .server: serverControls
+            case .localOnly: EmptyView()
             }
+
+            SyncExplanation()
+        }
+    }
+
+    @ViewBuilder
+    private var folderControls: some View {
+        HStack(spacing: 10) {
+            Button {
+                showPicker = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder.badge.plus")
+                    Text(settings.syncFolderURL == nil
+                         ? "Pick sync folder…"
+                         : "Change folder…")
+                        .font(Typo.mono(13, weight: .semibold))
+                }
+                .foregroundStyle(Theme.accent)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent.opacity(0.5), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
 
             if settings.syncFolderURL != nil {
                 Button {
@@ -98,18 +119,114 @@ struct IOSSettingsSheet: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.triangle.2.circlepath")
-                        Text("Refresh from sync folder")
-                            .font(Typo.mono(12, weight: .semibold))
+                        Text("Refresh").font(Typo.mono(12, weight: .semibold))
                     }
                     .foregroundStyle(Theme.fgDim)
                     .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 9)
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
 
-            SyncExplanation()
+    @ViewBuilder
+    private var serverControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("server URL")
+                    .font(Typo.mono(10))
+                    .foregroundStyle(Theme.fgMute)
+                TextField("https://…fly.dev", text: $serverURLText)
+                    .textFieldStyle(.plain)
+                    .font(Typo.mono(12))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                    .padding(10)
+                    .background(Theme.bgSoft)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1))
+                if let err = serverUrlError {
+                    Text(err).font(Typo.mono(10)).foregroundStyle(Theme.danger)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("sync id (paste on other devices)")
+                    .font(Typo.mono(10))
+                    .foregroundStyle(Theme.fgMute)
+                TextField("main_…", text: $serverIdText)
+                    .textFieldStyle(.plain)
+                    .font(Typo.mono(12))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .padding(10)
+                    .background(Theme.bgSoft)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1))
+                HStack(spacing: 8) {
+                    Button("Generate new id") {
+                        serverIdText = ServerConfig.generateMainDocId()
+                        serverIdError = nil
+                    }
+                    .buttonStyle(.plain)
+                    .font(Typo.mono(11))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.accent.opacity(0.4), lineWidth: 1))
+
+                    Button("Copy") {
+                        UIPasteboard.general.string = serverIdText
+                    }
+                    .buttonStyle(.plain)
+                    .font(Typo.mono(11))
+                    .foregroundStyle(Theme.fgDim)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
+                    .disabled(serverIdText.isEmpty)
+                }
+                if let err = serverIdError {
+                    Text(err).font(Typo.mono(10)).foregroundStyle(Theme.danger)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button(settings.mode.kind == .server ? "Apply" : "Connect") {
+                    applyServerConfig()
+                }
+                .buttonStyle(.plain)
+                .font(Typo.mono(12, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent.opacity(0.5), lineWidth: 1))
+
+                Button("Test") { runHealthCheck() }
+                .buttonStyle(.plain)
+                .font(Typo.mono(12))
+                .foregroundStyle(Theme.fgDim)
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1))
+
+                if settings.mode.kind == .server {
+                    Button("Refresh") {
+                        persistence.refreshFromDisk()
+                        settings.markMerged()
+                    }
+                    .buttonStyle(.plain)
+                    .font(Typo.mono(12))
+                    .foregroundStyle(Theme.fgDim)
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1))
+                }
+            }
+
+            if let msg = healthCheck {
+                Text(msg)
+                    .font(Typo.mono(10))
+                    .foregroundStyle(Theme.fgDim)
+            }
         }
     }
 
@@ -127,11 +244,6 @@ struct IOSSettingsSheet: View {
     private func themeChip(_ palette: ThemePalette) -> some View {
         let selected = palette.id == themeName
         return Button {
-            // Update the static BEFORE flipping @AppStorage. The `.id()`
-            // rebuild on the root view fires the moment themeName changes,
-            // and we need ThemePalette.current to already hold the new
-            // value so the rebuilt tree picks up the new colors — not the
-            // stale ones from app launch.
             ThemePalette.current = palette
             themeName = palette.id
         } label: {
@@ -222,6 +334,65 @@ struct IOSSettingsSheet: View {
             .font(Typo.mono(10, weight: .semibold))
             .tracking(0.8)
             .foregroundStyle(Theme.fgMute)
+    }
+
+    // MARK: - Helpers
+
+    private func applyMode(kind: SyncMode.Kind) {
+        switch kind {
+        case .localOnly:
+            settings.clearSync(persistence)
+        case .folder:
+            if settings.syncFolderURL == nil { showPicker = true }
+        case .server:
+            break
+        }
+    }
+
+    private func hydrateServerFields() {
+        if case .server(let cfg) = settings.mode {
+            serverURLText = cfg.baseURL.absoluteString
+            serverIdText = cfg.mainDocId
+        } else if serverIdText.isEmpty {
+            serverIdText = ServerConfig.generateMainDocId()
+        }
+    }
+
+    private func applyServerConfig() {
+        serverUrlError = nil
+        serverIdError = nil
+        let urlString = serverURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              url.host != nil else {
+            serverUrlError = "Enter a URL like https://todarchy-yourname.fly.dev"
+            return
+        }
+        let id = serverIdText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard ServerConfig.isValidDocId(id) else {
+            serverIdError = "Id must be 1–64 chars, letters/digits/_/-"
+            return
+        }
+        settings.setServer(ServerConfig(baseURL: url, mainDocId: id),
+                           persistence: persistence)
+        healthCheck = nil
+    }
+
+    private func runHealthCheck() {
+        healthCheck = "checking…"
+        let urlString = serverURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: urlString) else {
+            healthCheck = "invalid URL"
+            return
+        }
+        Task {
+            let client = ServerSyncClient(baseURL: url)
+            let ok = await client.healthz()
+            await MainActor.run {
+                healthCheck = ok ? "reachable ✓" : "unreachable"
+            }
+        }
     }
 }
 #endif
