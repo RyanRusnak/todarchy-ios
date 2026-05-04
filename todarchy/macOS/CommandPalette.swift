@@ -231,7 +231,7 @@ struct CommandPalette: View {
                 store.activeContextFilter = nil
             })
         }
-        for c in TaskContext.allCases {
+        for c in store.contexts {
             cmds.append(.init(name: "Filter: \(c.rawValue)", hint: nil) {
                 store.activeContextFilter = c
             })

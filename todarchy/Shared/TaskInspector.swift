@@ -112,7 +112,7 @@ struct TaskInspectorContent: View {
             }
             metaRow("context") {
                 Menu {
-                    ForEach(TaskContext.allCases) { ctx in
+                    ForEach(store.contexts) { ctx in
                         Button {
                             store.setContext(task.id, ctx: ctx)
                         } label: {

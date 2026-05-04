@@ -151,7 +151,7 @@ struct VoiceCaptureSheet: View {
         // while QuickAddParser expects "!today" / "@phone" tokens. Rewrite
         // bare due/context keywords into their tagged form so the same
         // chip semantics apply whether you speak or type.
-        store.add(raw: Self.tokenizeVoiceTranscript(raw))
+        store.add(raw: Self.tokenizeVoiceTranscript(raw, contexts: store.contexts))
         onClose()
     }
 
@@ -166,7 +166,10 @@ struct VoiceCaptureSheet: View {
     /// going until we hit a word that isn't a recognized keyword. So
     /// multiple keywords stack correctly without a runaway rewrite of
     /// the whole title.
-    static func tokenizeVoiceTranscript(_ raw: String) -> String {
+    static func tokenizeVoiceTranscript(
+        _ raw: String,
+        contexts: [TaskContext] = TaskContext.allCases
+    ) -> String {
         let singleWordDue: [String: String] = [
             "today": "!today",
             "tonight": "!today",
@@ -177,7 +180,7 @@ struct VoiceCaptureSheet: View {
             "this week": "!week",
             "next week": "!week",
         ]
-        let ctxNames = Set(TaskContext.allCases.map { String($0.rawValue.dropFirst()) })
+        let ctxNames = Set(contexts.map { String($0.rawValue.dropFirst()) })
 
         // Strip trailing sentence punctuation, tokenize on whitespace.
         let trimmed = raw

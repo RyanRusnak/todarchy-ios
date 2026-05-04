@@ -6,6 +6,11 @@ final class TaskStore: ObservableObject {
     @Published var tasks: [TaskItem] { didSet { if !isApplyingDiskState { scheduleSave() } } }
     @Published var projects: [ProjectItem] { didSet { if !isApplyingDiskState { scheduleSave() } } }
 
+    /// User-managed context list. Replaces the static `TaskContext.allCases`
+    /// reads at every UI surface. Seeded with the built-ins on first launch
+    /// and grown automatically when the parser encounters a new `@token`.
+    @Published var contexts: [TaskContext] { didSet { if !isApplyingDiskState { scheduleSave() } } }
+
     /// True while `refreshFromDisk` is reassigning `tasks`/`projects` from a
     /// loaded snapshot. Without this, each assignment would fire `didSet`
     /// which schedules a save of the just-loaded state — and if the user
@@ -50,11 +55,21 @@ final class TaskStore: ObservableObject {
                 if copy.pos == nil { copy.pos = copy.created }
                 return copy
             }
+            // Snapshots from before the contexts list was persisted decode
+            // with `nil`; treat that as "use the built-in seed" rather than
+            // wiping the user's chips on launch.
+            let loaded = snapshot.contexts ?? []
+            self.contexts = loaded.isEmpty ? TaskContext.allCases : loaded
         } else {
             self.projects = Self.seedProjects
             self.tasks = Self.seedTasks()
+            self.contexts = TaskContext.allCases
             // Persist the seed so the on-disk doc starts with sensible content.
-            persistence?.saveNow(.init(tasks: self.tasks, projects: self.projects))
+            persistence?.saveNow(.init(
+                tasks: self.tasks,
+                projects: self.projects,
+                contexts: self.contexts
+            ))
         }
 
         // When another device writes the shared .automerge file, refresh.
@@ -75,6 +90,12 @@ final class TaskStore: ObservableObject {
             if copy.pos == nil { copy.pos = copy.created }
             return copy
         }
+        // External writers (sync) may have added/removed contexts; pick up
+        // their list. Fall back to the in-memory list rather than wiping
+        // when the doc is from before the field existed.
+        if let loaded = snap.contexts, !loaded.isEmpty {
+            self.contexts = loaded
+        }
         isApplyingDiskState = false
         // Preserve selection if the task still exists.
         if let sid = selected, !tasks.contains(where: { $0.id == sid }) {
@@ -90,6 +111,55 @@ final class TaskStore: ObservableObject {
         let s = TaskStore(persistence: nil)
         s.tasks = demoTasks()
         return s
+    }
+
+    // MARK: - Context mutations
+
+    /// Add a context label. Idempotent: re-adding an existing context (case-
+    /// insensitive after normalization) is a no-op. Used by both the editor
+    /// sheet and `add(raw:list:)` for auto-discovery from `@token` parsing.
+    @discardableResult
+    func addContext(_ raw: String) -> TaskContext? {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        let ctx = TaskContext(rawValue: trimmed)
+        // The TaskContext init enforces a single leading `@`, so contexts
+        // with just punctuation collapse to "@" — refuse those.
+        guard ctx.rawValue.count > 1 else { return nil }
+        if contexts.contains(ctx) { return ctx }
+        snapshot()
+        contexts.append(ctx)
+        return ctx
+    }
+
+    /// Remove a context. Tasks that reference it keep their `ctx` value —
+    /// the row UI still renders the chip from the raw string, so the
+    /// information isn't lost. The user can clean up via the inspector
+    /// or re-add the context to bring it back.
+    func removeContext(_ ctx: TaskContext) {
+        guard contexts.contains(ctx) else { return }
+        snapshot()
+        contexts.removeAll { $0 == ctx }
+        if activeContextFilter == ctx { activeContextFilter = nil }
+    }
+
+    /// Rename `from` to `to` — both in the contexts list and on every task
+    /// that points to `from`. Refuses to overwrite an existing context.
+    @discardableResult
+    func renameContext(from: TaskContext, to rawTo: String) -> Bool {
+        let target = TaskContext(rawValue: rawTo)
+        guard target.rawValue.count > 1 else { return false }
+        if target == from { return true }
+        if contexts.contains(target) { return false }
+        snapshot()
+        if let idx = contexts.firstIndex(of: from) {
+            contexts[idx] = target
+        }
+        for i in tasks.indices where tasks[i].ctx == from {
+            tasks[i].ctx = target
+        }
+        if activeContextFilter == from { activeContextFilter = target }
+        return true
     }
 
     // Explicit-delete buffers. Populated by `delete(_:)` /
@@ -111,7 +181,7 @@ final class TaskStore: ObservableObject {
         pendingTaskDeletes.removeAll()
         pendingProjectDeletes.removeAll()
         persistence.scheduleSave(
-            .init(tasks: tasks, projects: projects),
+            .init(tasks: tasks, projects: projects, contexts: contexts),
             deletedTaskIds: taskDeletes,
             deletedProjectIds: projectDeletes
         )
@@ -267,6 +337,12 @@ final class TaskStore: ObservableObject {
         let title = parsed.title.isEmpty ? raw.trimmingCharacters(in: .whitespaces) : parsed.title
         guard !title.isEmpty else { return nil }
         snapshot()
+        // Auto-register an unfamiliar context so it appears in the sidebar
+        // and pickers. Built-ins are already in `contexts`; new tokens get
+        // appended.
+        if let parsedCtx = parsed.ctx, !contexts.contains(parsedCtx) {
+            contexts.append(parsedCtx)
+        }
         // New tasks get pos = now, which is the largest timestamp in the
         // group — sortTasks_ sorts ASC by pos, so they land at the bottom.
         let now = Date()

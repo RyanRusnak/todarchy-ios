@@ -43,8 +43,10 @@ struct TaskContext: Hashable, Codable, Identifiable {
     /// the context editor; the Automerge doc stores the authoritative list.
     static let allCases: [TaskContext] = [.home, .work, .errands, .phone, .mac, .read]
 
-    /// Theme color. Known names map to palette colors; user-defined contexts
-    /// fall back to `--fg-mute`.
+    /// Theme color. Built-in names keep their hand-tuned palette slot; any
+    /// user-defined context gets a deterministic pick from `paletteFallback`
+    /// so it has stable identity across launches without us needing to
+    /// persist a per-context color.
     var color: Color {
         switch rawValue {
         case "@home": return Theme.cyan
@@ -53,8 +55,24 @@ struct TaskContext: Hashable, Codable, Identifiable {
         case "@mac": return Theme.accent2
         case "@phone": return Theme.success
         case "@read": return Theme.orange
-        default: return Theme.fgMute
+        default: return Self.paletteFallback(for: rawValue)
         }
+    }
+
+    /// Hashes the raw string into one of the theme's accent-ish colors.
+    /// Stable across launches because we use a custom FNV-1a (Swift's
+    /// built-in `hashValue` is randomized per-process).
+    private static func paletteFallback(for raw: String) -> Color {
+        let palette: [Color] = [
+            Theme.accent, Theme.accent2, Theme.cyan, Theme.success,
+            Theme.warn, Theme.orange, Theme.blue, Theme.purple,
+        ]
+        var h: UInt64 = 0xcbf29ce484222325
+        for byte in raw.utf8 {
+            h ^= UInt64(byte)
+            h &*= 0x100000001b3
+        }
+        return palette[Int(h % UInt64(palette.count))]
     }
 }
 

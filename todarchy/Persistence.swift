@@ -283,6 +283,9 @@ final class TaskStorePersistence {
         let writeOk = retryOnPoison {
             try automerge.upsertTasks(mainTasks)
             try automerge.upsertProjects(snap.projects)
+            if let contexts = snap.contexts {
+                try automerge.writeContexts(contexts)
+            }
             for id in mainDeletes { try automerge.deleteTask(id) }
             for id in projectDeletes { try automerge.deleteProject(id) }
             let bytes = automerge.save()
@@ -858,6 +861,10 @@ final class TaskStorePersistence {
         var schema: Int = 1
         var tasks: [TaskItem]
         var projects: [ProjectItem]
+        /// User's context list. Optional in the wire format so older
+        /// snapshots without the field decode cleanly; missing/empty
+        /// means "fall back to the built-in seed set" at the call site.
+        var contexts: [TaskContext]? = nil
     }
 
     deinit {

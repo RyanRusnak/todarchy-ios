@@ -610,12 +610,13 @@ private struct QuickAddPreview: View {
 }
 
 private struct QuickAddChips: View {
+    @EnvironmentObject var store: TaskStore
     let insert: (String) -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(TaskContext.allCases) { c in
+                ForEach(store.contexts) { c in
                     chip(c.rawValue, color: c.color) { insert(c.rawValue) }
                 }
                 Divider().frame(height: 16).background(Theme.border)

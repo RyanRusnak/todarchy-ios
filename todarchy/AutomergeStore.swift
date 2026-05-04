@@ -125,8 +125,56 @@ final class AutomergeStore {
         try locked {
             let tasks = try readTasks().sorted { $0.sortPos < $1.sortPos }
             let projects = try readProjects()
-            return TaskStorePersistence.Snapshot(tasks: tasks, projects: projects)
+            let contexts = try readContexts()
+            return TaskStorePersistence.Snapshot(
+                tasks: tasks, projects: projects, contexts: contexts
+            )
         }
+    }
+
+    /// Replace the persisted contexts list with `contexts`. Used by the
+    /// editor sheet (add/remove/rename). Idempotent; safe to call from
+    /// scheduleSave on every tick — we only rewrite when the list differs
+    /// to avoid pointless Automerge churn.
+    func writeContexts(_ contexts: [TaskContext]) throws {
+        try locked {
+            let current = try readContexts() ?? []
+            if current == contexts { return }
+            let listObj = try requireList(key: "contexts")
+            let len = try doc.length(obj: listObj)
+            // Clear then reinsert. This isn't great for merge semantics
+            // (two devices editing concurrently can produce duplicates)
+            // but the contexts list is short and edits are rare. If it
+            // becomes a problem we can move to per-context map keys.
+            for _ in 0..<len {
+                try doc.delete(obj: listObj, index: 0)
+            }
+            for (i, c) in contexts.enumerated() {
+                try doc.insert(obj: listObj, index: UInt64(i), value: .String(c.rawValue))
+            }
+        }
+    }
+
+    private func readContexts() throws -> [TaskContext]? {
+        guard case let .Object(listId, .List) = try doc.get(obj: ObjId.ROOT, key: "contexts") else {
+            return nil
+        }
+        let len = try doc.length(obj: listId)
+        var out: [TaskContext] = []
+        out.reserveCapacity(Int(len))
+        for i in 0..<len {
+            if case let .Scalar(.String(s)) = try doc.get(obj: listId, index: i) {
+                out.append(TaskContext(rawValue: s))
+            }
+        }
+        return out
+    }
+
+    private func requireList(key: String) throws -> ObjId {
+        if case let .Object(objId, .List) = try doc.get(obj: ObjId.ROOT, key: key) {
+            return objId
+        }
+        return try doc.putObject(obj: ObjId.ROOT, key: key, ty: .List)
     }
 
     // MARK: - Upsert / delete (mutation API)

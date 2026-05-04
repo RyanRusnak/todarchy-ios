@@ -67,7 +67,7 @@ private struct IPadSidebar: View {
 
             sectionHeader("CONTEXTS").padding(.top, 18)
 
-            ForEach(TaskContext.allCases) { ctx in
+            ForEach(store.contexts) { ctx in
                 contextRow(ctx)
             }
 
@@ -517,7 +517,7 @@ private struct IPadCaptureSheet: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(TaskContext.allCases) { c in
+                    ForEach(store.contexts) { c in
                         tokenButton(c.rawValue, color: c.color) { append(c.rawValue) }
                     }
                     tokenButton("!today", color: Theme.danger) { append("!today") }

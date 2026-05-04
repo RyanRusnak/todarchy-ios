@@ -306,7 +306,7 @@ struct ContextPickerSheet: View {
             .padding(.bottom, 12)
 
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                ForEach(TaskContext.allCases) { ctx in
+                ForEach(store.contexts) { ctx in
                     button(for: ctx)
                 }
             }
@@ -611,7 +611,7 @@ struct TaskDetailSheet: View {
                 Text("context").font(Typo.mono(12)).foregroundStyle(Theme.fgMute).frame(width: 70, alignment: .leading)
                 Menu {
                     Button("none") { store.setContext(task.id, ctx: nil) }
-                    ForEach(TaskContext.allCases) { c in
+                    ForEach(store.contexts) { c in
                         Button(c.rawValue) { store.setContext(task.id, ctx: c) }
                     }
                 } label: {

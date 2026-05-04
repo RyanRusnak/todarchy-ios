@@ -144,6 +144,7 @@ enum VimMode: String {
 
 private struct MacSidebar: View {
     @EnvironmentObject var store: TaskStore
+    @State private var showContextEditor: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -167,8 +168,8 @@ private struct MacSidebar: View {
                 listRow(project, kbd: "\(idx + 1)")
             }
 
-            sectionHeader("CONTEXTS").padding(.top, 18)
-            ForEach(TaskContext.allCases) { ctx in
+            contextsHeader.padding(.top, 18)
+            ForEach(store.contexts) { ctx in
                 contextRow(ctx)
             }
 
@@ -179,6 +180,32 @@ private struct MacSidebar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.bgElev)
         .toolbar(.hidden, for: .windowToolbar)
+        .sheet(isPresented: $showContextEditor) {
+            ContextEditorSheet()
+                .environmentObject(store)
+                .preferredColorScheme(.dark)
+        }
+    }
+
+    private var contextsHeader: some View {
+        HStack {
+            sectionHeader("CONTEXTS")
+            Spacer()
+            Button {
+                showContextEditor = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.fgMute)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Edit contexts")
+            .padding(.trailing, 12)
+        }
+        .padding(.bottom, -4)
     }
 
     private func sectionHeader(_ text: String) -> some View {
@@ -408,7 +435,7 @@ private struct MacMainView: View {
         }
         Menu("Context") {
             Button("None") { store.setContext(task.id, ctx: nil) }
-            ForEach(TaskContext.allCases) { c in
+            ForEach(store.contexts) { c in
                 Button(c.rawValue) { store.setContext(task.id, ctx: c) }
             }
         }
