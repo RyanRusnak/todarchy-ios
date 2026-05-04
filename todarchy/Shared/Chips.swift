@@ -76,24 +76,27 @@ struct Checkbox: View {
     var deferred: Bool = false
 
     var body: some View {
+        // Build the shape from properties that all animate continuously
+        // (fill colour, stroke, checkmark scale) so the done <-> not-done
+        // transition gets a smooth spring rather than a crossfade between
+        // two different view identities.
         ZStack {
-            if done {
-                RoundedRectangle(cornerRadius: size / 2)
-                    .fill(Theme.success)
-                    .frame(width: size, height: size)
-                Image(systemName: "checkmark")
-                    .font(.system(size: size * 0.55, weight: .bold))
-                    .foregroundStyle(Theme.bg)
-            } else {
-                RoundedRectangle(cornerRadius: size / 2)
-                    .stroke(Theme.borderHi, lineWidth: 1.5)
-                    .background(
-                        RoundedRectangle(cornerRadius: size / 2)
-                            .fill(deferred ? Theme.purple.opacity(0.08) : .clear)
-                    )
-                    .frame(width: size, height: size)
-            }
+            RoundedRectangle(cornerRadius: size / 2)
+                .fill(done ? Theme.success
+                      : (deferred ? Theme.purple.opacity(0.08) : Color.clear))
+                .frame(width: size, height: size)
+                .overlay(
+                    RoundedRectangle(cornerRadius: size / 2)
+                        .stroke(done ? Color.clear : Theme.borderHi, lineWidth: 1.5)
+                )
+
+            Image(systemName: "checkmark")
+                .font(.system(size: size * 0.55, weight: .bold))
+                .foregroundStyle(Theme.bg)
+                .scaleEffect(done ? 1.0 : 0.0)
+                .opacity(done ? 1.0 : 0.0)
         }
+        .animation(.spring(response: 0.32, dampingFraction: 0.62), value: done)
     }
 }
 

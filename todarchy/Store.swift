@@ -255,9 +255,17 @@ final class TaskStore: ObservableObject {
         case .list(let id): listId = id
         case .context: listId = "inbox"
         }
+        add(raw: raw, list: listId)
+    }
+
+    /// Add a task to a specific list, ignoring the current `activeSelection`.
+    /// The menu bar quick-add uses this so captures always land in the inbox
+    /// regardless of which project the main window is showing.
+    @discardableResult
+    func add(raw: String, list listId: String) -> String? {
         let parsed = QuickAddParser.parse(raw)
         let title = parsed.title.isEmpty ? raw.trimmingCharacters(in: .whitespaces) : parsed.title
-        guard !title.isEmpty else { return }
+        guard !title.isEmpty else { return nil }
         snapshot()
         // New tasks get pos = now, which is the largest timestamp in the
         // group — sortTasks_ sorts ASC by pos, so they land at the bottom.
@@ -272,6 +280,7 @@ final class TaskStore: ObservableObject {
             pos: now
         )
         tasks.append(task)
+        return task.id
     }
 
     func toggleDone(_ id: String) {

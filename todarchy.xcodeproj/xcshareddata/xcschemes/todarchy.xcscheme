@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "F8BB8BEB7FF137A5754D09B3"
+               BlueprintIdentifier = "31FAC6574228BB38C1AEF7D2"
                BuildableName = "todarchy.app"
                BlueprintName = "todarchy"
                ReferencedContainer = "container:todarchy.xcodeproj">
@@ -30,7 +30,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F8BB8BEB7FF137A5754D09B3"
+            BlueprintIdentifier = "31FAC6574228BB38C1AEF7D2"
             BuildableName = "todarchy.app"
             BlueprintName = "todarchy"
             ReferencedContainer = "container:todarchy.xcodeproj">
@@ -41,7 +41,7 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "4C8141AD213FCDD2528ADAD7"
+               BlueprintIdentifier = "3139E430C8464AD51337DD73"
                BuildableName = "todarchyTests.xctest"
                BlueprintName = "todarchyTests"
                ReferencedContainer = "container:todarchy.xcodeproj">
@@ -63,7 +63,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F8BB8BEB7FF137A5754D09B3"
+            BlueprintIdentifier = "31FAC6574228BB38C1AEF7D2"
             BuildableName = "todarchy.app"
             BlueprintName = "todarchy"
             ReferencedContainer = "container:todarchy.xcodeproj">
@@ -80,7 +80,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "F8BB8BEB7FF137A5754D09B3"
+            BlueprintIdentifier = "31FAC6574228BB38C1AEF7D2"
             BuildableName = "todarchy.app"
             BlueprintName = "todarchy"
             ReferencedContainer = "container:todarchy.xcodeproj">

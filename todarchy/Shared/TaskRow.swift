@@ -17,10 +17,31 @@ struct TaskRow: View {
     @State private var editBuffer: String = ""
     @FocusState private var editFocus: Bool
 
+    /// True between the click on the checkbox and the actual `onToggle`
+    /// commit. Lets the row paint itself in the done state (filled circle,
+    /// strikethrough, dimmed text) for ~half a beat so the user sees the
+    /// completion register before the row vanishes from filtered lists.
+    @State private var pendingComplete: Bool = false
+
+    /// Bounces the checkbox once when the user marks the task done.
+    @State private var completionPulse: Bool = false
+
+    private var displayDone: Bool { task.isDone || pendingComplete }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Button(action: onToggle) {
-                Checkbox(done: task.isDone, deferred: task.isDeferred)
+            // The macOS row sits inside a parent that takes single-tap +
+            // double-tap recognizers; without an explicit hit shape on the
+            // button label, those parent gestures can swallow circle clicks
+            // and `handleToggle` never runs (so no fill animation either).
+            // The frame + contentShape match the popover row.
+            Button(action: handleToggle) {
+                Checkbox(done: displayDone, deferred: task.isDeferred)
+                    .scaleEffect(completionPulse ? 1.18 : 1.0)
+                    .animation(.spring(response: 0.28, dampingFraction: 0.55),
+                               value: completionPulse)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .padding(.top, 2)
@@ -47,9 +68,10 @@ struct TaskRow: View {
                 } else {
                     Text(task.title)
                         .font(Typo.mono(compact ? 14 : 15, weight: .medium))
-                        .foregroundStyle(task.isDone ? Theme.fgMute : Theme.fg)
-                        .strikethrough(task.isDone, color: Theme.fgFaint)
+                        .foregroundStyle(displayDone ? Theme.fgMute : Theme.fg)
+                        .strikethrough(displayDone, color: Theme.fgFaint)
                         .lineLimit(compact ? 1 : 2)
+                        .animation(.easeOut(duration: 0.2), value: displayDone)
                 }
 
                 if !task.note.isEmpty {
@@ -98,11 +120,40 @@ struct TaskRow: View {
         .padding(.horizontal, 16)
         .frame(minHeight: compact ? 48 : 64, alignment: .leading)
         .contentShape(Rectangle())
-        .opacity(task.isDone ? 0.55 : 1.0)
+        .opacity(displayDone ? 0.55 : 1.0)
+        .animation(.easeOut(duration: 0.2), value: displayDone)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Theme.border.opacity(0.6))
                 .frame(height: 1)
+        }
+    }
+
+    private func handleToggle() {
+        // Re-toggling an already-done task (un-completing) commits
+        // immediately — no need to animate the "going back to open"
+        // transition since the row stays visible either way.
+        if task.isDone {
+            onToggle()
+            return
+        }
+        // Already mid-animation: ignore extra clicks so we don't
+        // double-fire onToggle.
+        if pendingComplete { return }
+
+        pendingComplete = true
+        completionPulse = true
+
+        // Drop the pulse just after it peaks so the spring settles.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            completionPulse = false
+        }
+        // Commit the store mutation after the user has had time to see
+        // the circle fill + checkmark land. Tuned to feel snappy, not
+        // sluggish — rows still vanish quickly from filtered lists.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) {
+            onToggle()
+            pendingComplete = false
         }
     }
 }
