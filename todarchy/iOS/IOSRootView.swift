@@ -250,33 +250,96 @@ private struct IOSHeader: View {
 
 // MARK: - List chips row
 
+/// Each chip in the horizontal scroller publishes its visible mid-X
+/// through this key; the parent picks the closest-to-center to drive
+/// auto-selection. Last-write-wins on merge — the scroll only ever has
+/// one truthy position per chip per layout pass anyway.
+private struct ChipCentersKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout Value, nextValue: () -> Value) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
 private struct IOSListChips: View {
     @EnvironmentObject var store: TaskStore
     let openContextPicker: () -> Void
 
+    /// Coord-space name shared by the GeometryReaders that publish each
+    /// chip's mid-X. Anchored on the ScrollView so positions reported are
+    /// already visible-viewport positions, not content-relative ones.
+    private static let viewportSpace = "ios.chips.viewport"
+
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(store.allLists) { list in
-                    chip(for: list)
-                }
-                Button(action: openContextPicker) {
-                    HStack(spacing: 6) {
-                        Text("@").font(Typo.mono(13, weight: .semibold))
-                        Text("context").font(Typo.mono(12))
+        GeometryReader { outer in
+            let viewportMidX = outer.size.width / 2
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(store.allLists) { list in
+                        chip(for: list)
+                            .background(centerReporter(id: list.id))
                     }
-                    .foregroundStyle(Theme.fgMute)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .overlay(
-                        Capsule().stroke(Theme.borderHi, style: StrokeStyle(lineWidth: 1, dash: [3]))
-                    )
+                    Button(action: openContextPicker) {
+                        HStack(spacing: 6) {
+                            Text("@").font(Typo.mono(13, weight: .semibold))
+                            Text("context").font(Typo.mono(12))
+                        }
+                        .foregroundStyle(Theme.fgMute)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .overlay(
+                            Capsule().stroke(Theme.borderHi, style: StrokeStyle(lineWidth: 1, dash: [3]))
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 12)
+            .coordinateSpace(name: Self.viewportSpace)
+            .onPreferenceChange(ChipCentersKey.self) { centers in
+                selectClosest(to: viewportMidX, in: centers)
+            }
         }
+        // A horizontal chip row needs a fixed height inside a vertical
+        // stack — without this, GeometryReader collapses to zero.
+        .frame(height: 46)
+        // Tick a light selection haptic whenever the active list id flips.
+        // `.selection` is the picker-style feel — quietest of the bunch —
+        // and only fires on change *after* first appearance, so we don't
+        // get a spurious tap on view load.
+        .sensoryFeedback(.selection, trigger: activeListId)
+    }
+
+    /// `nil` when a context filter is active or when the user is on a
+    /// non-list selection. Bound to `.sensoryFeedback` so haptics only
+    /// fire on real list-to-list transitions.
+    private var activeListId: String? {
+        guard store.activeContextFilter == nil else { return nil }
+        if case .list(let id) = store.activeSelection { return id }
+        return nil
+    }
+
+    private func centerReporter(id: String) -> some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: ChipCentersKey.self,
+                value: [id: geo.frame(in: .named(Self.viewportSpace)).midX]
+            )
+        }
+    }
+
+    private func selectClosest(to midX: CGFloat, in centers: [String: CGFloat]) {
+        guard !centers.isEmpty else { return }
+        // A context filter overrides the list selection; don't fight the
+        // user by yanking them back to a list while a context is active.
+        guard store.activeContextFilter == nil else { return }
+
+        let closest = centers.min { abs($0.value - midX) < abs($1.value - midX) }
+        guard let id = closest?.key else { return }
+        if case .list(let current) = store.activeSelection, current == id { return }
+        store.activeSelection = .list(id)
     }
 
     private func chip(for list: ProjectItem) -> some View {
