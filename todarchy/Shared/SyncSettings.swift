@@ -21,6 +21,13 @@ final class SyncSettings: ObservableObject {
     @Published private(set) var lastSyncError: String?
     @Published private(set) var serverHealth: ServerHealth = .unknown
 
+    /// One-shot user-facing message for share-link arrivals that can't
+    /// be handled silently (e.g. link opened before any sync transport
+    /// is configured — the encrypted shared file has no way to reach
+    /// us). Root view presents an alert when non-nil; setting back to
+    /// nil dismisses.
+    @Published var shareLinkAlert: String?
+
     /// Shared-project coordinator. Rooted in the *local* folder that
     /// holds shared-project files: the sync folder in `.folder` mode,
     /// Application Support in `.localOnly` / `.server` modes. When

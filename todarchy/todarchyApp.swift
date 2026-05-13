@@ -104,9 +104,13 @@ struct TodarchyApp: App {
     @MainActor
     private func acceptShareLink(_ url: URL) {
         guard let manager = SyncSettings.shared.sharedProjectManager else {
-            #if DEBUG
-            print("todarchy: share link opened before a sync folder was configured — ignoring")
-            #endif
+            // The link carries the decryption key, but the encrypted
+            // .tdshared file is delivered through the sync transport.
+            // Without a transport configured, there's no path to the
+            // bytes — surface that explicitly so testers don't think
+            // the link is broken.
+            SyncSettings.shared.shareLinkAlert =
+                "Shared lists need Sync set up first. Open Settings → Sync to connect to a sync server, then re-open the link."
             return
         }
         do {
@@ -124,7 +128,26 @@ struct TodarchyApp: App {
 }
 
 struct RootView: View {
+    @ObservedObject private var syncSettings = SyncSettings.shared
+
     var body: some View {
+        platformRoot
+            .alert(
+                "Sync Required",
+                isPresented: Binding(
+                    get: { syncSettings.shareLinkAlert != nil },
+                    set: { if !$0 { syncSettings.shareLinkAlert = nil } }
+                ),
+                presenting: syncSettings.shareLinkAlert
+            ) { _ in
+                Button("OK", role: .cancel) { syncSettings.shareLinkAlert = nil }
+            } message: { text in
+                Text(text)
+            }
+    }
+
+    @ViewBuilder
+    private var platformRoot: some View {
         #if os(macOS)
         MacRootView()
         #else
