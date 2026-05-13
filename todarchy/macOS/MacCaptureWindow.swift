@@ -27,7 +27,7 @@ struct MacCaptureWindow: View {
 
             HStack(alignment: .center) {
                 Text("+").font(Typo.mono(20)).foregroundStyle(Theme.accent)
-                TextField(text: $text) {
+                TextField(text: $text, axis: .vertical) {
                     Text("call mom @phone !today /remember to ask about flights")
                         .foregroundStyle(Theme.fgMute)
                 }
@@ -35,6 +35,7 @@ struct MacCaptureWindow: View {
                 .font(Typo.mono(16))
                 .foregroundStyle(Theme.fg)
                 .focused($focus)
+                .lineLimit(1...8)
                 .onSubmit {
                     guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                     onCommit()
@@ -71,7 +72,7 @@ struct MacCaptureWindow: View {
             )
 
             HStack {
-                Text("↵ save").font(Typo.mono(10)).foregroundStyle(Theme.fgFaint)
+                Text("⌘↵ save").font(Typo.mono(10)).foregroundStyle(Theme.fgFaint)
                 Text("⎋ cancel").font(Typo.mono(10)).foregroundStyle(Theme.fgFaint)
                 Text("⇥ list").font(Typo.mono(10)).foregroundStyle(Theme.fgFaint)
                 Spacer()
@@ -92,6 +93,7 @@ struct MacCaptureWindow: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .disabled(parsed.title.isEmpty)
                     .opacity(parsed.title.isEmpty ? 0.5 : 1)
+                    .keyboardShortcut(.return, modifiers: [.command])
             }
         }
         .padding(20)

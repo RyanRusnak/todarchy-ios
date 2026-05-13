@@ -569,7 +569,7 @@ private struct IOSQuickAddBar: View {
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Theme.accent)
 
-                TextField(text: $text, axis: .horizontal) {
+                TextField(text: $text, axis: .vertical) {
                     Text("add task…")
                         .foregroundStyle(Theme.fgMute)
                 }
@@ -577,6 +577,7 @@ private struct IOSQuickAddBar: View {
                 .foregroundStyle(Theme.fg)
                 .focused($tfFocus)
                 .submitLabel(.send)
+                .lineLimit(1...5)
                 .onSubmit {
                     guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                     commit()
@@ -595,6 +596,7 @@ private struct IOSQuickAddBar: View {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(LinearGradient(colors: [Theme.accent, Theme.accent2], startPoint: .leading, endPoint: .trailing))
                     )
+                    .keyboardShortcut(.return, modifiers: [.command])
                 } else {
                     Button(action: onVoice) {
                         Image(systemName: "mic")
@@ -609,7 +611,7 @@ private struct IOSQuickAddBar: View {
                 }
             }
             .padding(.horizontal, 16)
-            .frame(height: 56)
+            .frame(minHeight: 56)
             .background(Theme.bgElev)
             .overlay(alignment: .top) {
                 Rectangle().fill(Theme.border).frame(height: 1)
