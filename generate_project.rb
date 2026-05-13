@@ -30,6 +30,10 @@ def write_info_plist(path)
     'CFBundleVersion'                 => '$(CURRENT_PROJECT_VERSION)',
     'LSApplicationCategoryType'       => 'public.app-category.productivity',
     'NSHumanReadableCopyright'        => 'Copyright 2026 todarchy',
+    # Export compliance: app uses only standard Apple-framework crypto
+    # (HTTPS, Speech). Declaring `false` skips the App Store Connect
+    # export-compliance form on every TestFlight upload.
+    'ITSAppUsesNonExemptEncryption'   => false,
     'NSMainStoryboardFile'            => '',
     'NSPrincipalClass'                => 'NSApplication',
     # Voice task capture (Apple Speech framework, on-device).
@@ -125,8 +129,11 @@ common = {
   'MARKETING_VERSION' => '0.1',
   'DEVELOPMENT_TEAM' => '',
   'CODE_SIGN_STYLE' => 'Automatic',
-  'CODE_SIGN_IDENTITY' => '-',
-  'CODE_SIGN_IDENTITY[sdk=iphoneos*]' => '',
+  # Leave CODE_SIGN_IDENTITY unset so automatic signing can pick the
+  # right identity per-platform (Apple Development for Debug, Apple
+  # Distribution for Release/archive). Setting it to "-" forces ad-hoc
+  # everywhere; setting `[sdk=iphoneos*]` to "" actively suppresses
+  # iOS signing — both broke archive uploads to TestFlight.
   'SDKROOT' => 'auto',
   'SUPPORTED_PLATFORMS' => 'iphoneos iphonesimulator macosx',
   'TARGETED_DEVICE_FAMILY' => '1,2',
@@ -153,6 +160,10 @@ target.build_configurations.each do |config|
   # App target: use the hand-written plist instead of auto-generation.
   config.build_settings['GENERATE_INFOPLIST_FILE'] = 'NO'
   config.build_settings['INFOPLIST_FILE'] = 'todarchy/Info.plist'
+  # Mac App Store requires App Sandbox. iOS ships without an
+  # entitlements file (none of our iOS-side capabilities require one
+  # today). The `[sdk=macosx*]` scope keeps the iOS build unchanged.
+  config.build_settings['CODE_SIGN_ENTITLEMENTS[sdk=macosx*]'] = 'todarchy/macOS/todarchy.entitlements'
 end
 
 # Release-only optimizations
