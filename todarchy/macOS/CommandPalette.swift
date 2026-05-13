@@ -171,7 +171,9 @@ struct CommandPalette: View {
             },
             .init(name: "Toggle Show Done", hint: nil) { store.showDone.toggle() },
             .init(name: "Toggle Show Deferred", hint: nil) { store.showDeferred.toggle() },
-            .init(name: "Complete Selected", hint: "x") { store.toggleSelectedDone() },
+            .init(name: "Complete Selected", hint: "x") {
+                NotificationCenter.default.post(name: .todarchyToggleDone, object: nil)
+            },
             .init(name: "Defer Selected 24h", hint: "s") { store.deferSelected() },
             .init(name: "Delete Selected", hint: "⌫") { store.deleteSelected() },
             .init(name: "Manage Projects", hint: "gn") {

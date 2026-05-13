@@ -389,14 +389,19 @@ final class MacKeyRouterTests: XCTestCase {
     }
 
     func testMonitorApplyToggleComplete() {
+        // .toggleComplete now posts `.todarchyToggleDone`; the selected
+        // TaskRow consumes it and runs its animated handleToggle, which
+        // is what commits the store mutation. Verify the routing side
+        // here (the post) — the row's animation/commit is exercised
+        // via the UI, not unit tests.
         let store = TaskStore.ephemeral()
         store.activeSelection = .list("p_work")
         store.selectFirst()
-        let id = store.selectedTaskId!
         let monitor = MacMainKeyMonitor()
         monitor.store = store
+        let exp = expectation(forNotification: .todarchyToggleDone, object: nil)
         XCTAssertTrue(monitor.apply(.toggleComplete))
-        XCTAssertTrue(store.tasks.first(where: { $0.id == id })!.isDone)
+        wait(for: [exp], timeout: 1.0)
     }
 
     func testMonitorApplyDelete() {
@@ -416,13 +421,17 @@ final class MacKeyRouterTests: XCTestCase {
     }
 
     func testMonitorApplyUndoRestoresState() {
+        // .toggleComplete is now async (posts a notification; commit
+        // happens in TaskRow.handleToggle). Drive the toggle directly
+        // here to keep the undo-roundtrip assertion focused on the
+        // undo system rather than the keyboard-routing plumbing.
         let store = TaskStore.ephemeral()
         store.activeSelection = .list("p_work")
         store.selectFirst()
         let id = store.selectedTaskId!
         let monitor = MacMainKeyMonitor()
         monitor.store = store
-        _ = monitor.apply(.toggleComplete)
+        _ = store.toggleSelectedDone()
         XCTAssertTrue(store.tasks.first(where: { $0.id == id })!.isDone)
         XCTAssertTrue(monitor.apply(.undo))
         XCTAssertFalse(store.tasks.first(where: { $0.id == id })!.isDone)

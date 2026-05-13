@@ -80,9 +80,9 @@ struct MacRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .todarchyOpenSearch)) { _ in
             showSearch = true
         }
-        .onReceive(NotificationCenter.default.publisher(for: .todarchyToggleDone)) { _ in
-            store.toggleSelectedDone()
-        }
+        // Toggle Complete is now consumed by the selected `TaskRow`'s
+        // own listener so the keyboard path animates exactly like a
+        // checkbox click. See `TaskRow.onSelectedToggleDone`.
         .onReceive(NotificationCenter.default.publisher(for: .todarchyDeleteSelected)) { _ in
             store.deleteSelected()
         }
@@ -353,6 +353,7 @@ private struct MacMainView: View {
                                     showList: store.activeContextFilter != nil,
                                     highlightedCtx: store.activeContextFilter,
                                     isEditing: store.editingTaskId == row.task.id,
+                                    isSelected: row.task.id == store.selectedTaskId,
                                     onToggle: {
                                         withAnimation(.easeInOut(duration: 0.18)) {
                                             store.toggleDone(row.task.id)

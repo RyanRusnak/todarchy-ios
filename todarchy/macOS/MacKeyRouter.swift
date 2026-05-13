@@ -259,7 +259,12 @@ final class MacMainKeyMonitor: ObservableObject {
         case .selectPrevious: store?.selectPrevious(); return true
         case .selectFirst: store?.selectFirst(); return true
         case .selectLast: store?.selectLast(); return true
-        case .toggleComplete: store?.toggleSelectedDone(); return true
+        case .toggleComplete:
+            // Posted instead of mutating the store directly so the
+            // selected `TaskRow` runs its own animated `handleToggle`
+            // (fill + pulse + strikethrough), matching the click path.
+            NotificationCenter.default.post(name: .todarchyToggleDone, object: nil)
+            return true
         case .deleteSelected: store?.deleteSelected(); return true
         case .deferSelected:
             // Route s to the picker sheet instead of applying the 24h default.
