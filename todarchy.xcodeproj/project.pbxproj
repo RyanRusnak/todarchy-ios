@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 46;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -203,7 +203,7 @@
 		3E01A0A3C0D021AF6F83BB34 /* TaskInspector.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskInspector.swift; path = todarchy/Shared/TaskInspector.swift; sourceTree = "<group>"; };
 		3F4B67860CC0844DF3A169CD /* MenuBarExtraView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MenuBarExtraView.swift; path = todarchy/macOS/MenuBarExtraView.swift; sourceTree = "<group>"; };
 		40809D03611AF7C3CE00F4F0 /* ExportImport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExportImport.swift; path = todarchy/ExportImport.swift; sourceTree = "<group>"; };
-		421A79F11DF02B251B851977 /* JetBrainsMono-Bold.ttf */ = {isa = PBXFileReference; includeInIndex = 1; path = "JetBrainsMono-Bold.ttf"; sourceTree = "<group>"; };
+		421A79F11DF02B251B851977 /* JetBrainsMono-Bold.ttf */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = file; path = "JetBrainsMono-Bold.ttf"; sourceTree = "<group>"; };
 		43AB67A7CB2DF59FB19C3D7A /* ServerSyncClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ServerSyncClient.swift; sourceTree = "<group>"; };
 		4674E9A8769590EC019B3579 /* Models.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		491B13731C04F9BC013BA8A2 /* IOSSyncBarTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IOSSyncBarTests.swift; sourceTree = "<group>"; };
@@ -248,7 +248,7 @@
 		8C3A879BFED7CF2B4EDE3F19 /* DeferParser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DeferParser.swift; path = todarchy/DeferParser.swift; sourceTree = "<group>"; };
 		8D86CCBB8AF92716113CC171 /* MacCommands.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MacCommands.swift; path = todarchy/macOS/MacCommands.swift; sourceTree = "<group>"; };
 		8E11556E9FFC7E8D8CFCA585 /* DeferPickerSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DeferPickerSheet.swift; path = todarchy/macOS/DeferPickerSheet.swift; sourceTree = "<group>"; };
-		91EC162DAFCE9A3BFB328C08 /* JetBrainsMono-SemiBold.ttf */ = {isa = PBXFileReference; includeInIndex = 1; path = "JetBrainsMono-SemiBold.ttf"; sourceTree = "<group>"; };
+		91EC162DAFCE9A3BFB328C08 /* JetBrainsMono-SemiBold.ttf */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = file; path = "JetBrainsMono-SemiBold.ttf"; sourceTree = "<group>"; };
 		9358884ABA42EBFC046FA60D /* VoiceCapture.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VoiceCapture.swift; sourceTree = "<group>"; };
 		9889AAA4CA4AF362581AADC9 /* SharedProjectManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SharedProjectManager.swift; sourceTree = "<group>"; };
 		98DEB86CFC9F51FD7576423E /* TaskInspector.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskInspector.swift; sourceTree = "<group>"; };
@@ -287,7 +287,7 @@
 		CD95448AC958DFD6190F491E /* TaskSearch.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskSearch.swift; sourceTree = "<group>"; };
 		D091C664AEBAC1002B2C70A4 /* ShareKeysMap.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ShareKeysMap.swift; path = todarchy/Shared/ShareKeysMap.swift; sourceTree = "<group>"; };
 		D2ACA83142300194F6AE9B5F /* CryptoBox.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CryptoBox.swift; path = todarchy/Shared/CryptoBox.swift; sourceTree = "<group>"; };
-		D628E742005FC1B1271FCE5F /* JetBrainsMono-Regular.ttf */ = {isa = PBXFileReference; includeInIndex = 1; path = "JetBrainsMono-Regular.ttf"; sourceTree = "<group>"; };
+		D628E742005FC1B1271FCE5F /* JetBrainsMono-Regular.ttf */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = file; path = "JetBrainsMono-Regular.ttf"; sourceTree = "<group>"; };
 		D72769496D4F205402637E79 /* PassphraseGenerator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PassphraseGenerator.swift; sourceTree = "<group>"; };
 		E0152A8E1DCD41048C9EEA22 /* IPadRootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = IPadRootView.swift; path = todarchy/iPad/IPadRootView.swift; sourceTree = "<group>"; };
 		E1C18742E515BD803BCDFF6E /* VoiceCapture.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = VoiceCapture.swift; path = todarchy/Shared/VoiceCapture.swift; sourceTree = "<group>"; };
@@ -307,7 +307,7 @@
 		F63368AA7904956DFB676146 /* SyncNowTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SyncNowTests.swift; sourceTree = "<group>"; };
 		F65424BDE11F5A31FE2FB142 /* todarchy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = todarchy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F77DE3B870ADE40D10EEC9CE /* KeyStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = KeyStore.swift; path = todarchy/Shared/KeyStore.swift; sourceTree = "<group>"; };
-		FAF4D857D19504E1FAC257C6 /* JetBrainsMono-Medium.ttf */ = {isa = PBXFileReference; includeInIndex = 1; path = "JetBrainsMono-Medium.ttf"; sourceTree = "<group>"; };
+		FAF4D857D19504E1FAC257C6 /* JetBrainsMono-Medium.ttf */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = file; path = "JetBrainsMono-Medium.ttf"; sourceTree = "<group>"; };
 		FE880409F35D317D4FE6A70B /* DeferPickerSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DeferPickerSheet.swift; sourceTree = "<group>"; };
 		FF7A3B8FCA8DF035175D0099 /* SharedProjectRoutingTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SharedProjectRoutingTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -421,7 +421,6 @@
 				9358884ABA42EBFC046FA60D /* VoiceCapture.swift */,
 				655EDD7B6550418061078A74 /* VoiceCaptureSheet.swift */,
 			);
-			name = Shared;
 			path = Shared;
 			sourceTree = "<group>";
 		};
@@ -466,7 +465,6 @@
 				892E40FFB7573F4553BFD4FE /* ThemeTests.swift */,
 				5BFE4F01B28D44E34738B14C /* VoiceTranscriptTokenizerTests.swift */,
 			);
-			name = todarchyTests;
 			path = todarchyTests;
 			sourceTree = "<group>";
 		};
@@ -478,7 +476,6 @@
 				D628E742005FC1B1271FCE5F /* JetBrainsMono-Regular.ttf */,
 				91EC162DAFCE9A3BFB328C08 /* JetBrainsMono-SemiBold.ttf */,
 			);
-			name = Resources;
 			path = Resources;
 			sourceTree = "<group>";
 		};
@@ -487,7 +484,6 @@
 			children = (
 				B645D01D2285C8E1A41A257E /* IPadRootView.swift */,
 			);
-			name = iPad;
 			path = iPad;
 			sourceTree = "<group>";
 		};
@@ -509,7 +505,6 @@
 				B2168B120ACC58C8C2343D15 /* ProjectEditorSheet.swift */,
 				CD95448AC958DFD6190F491E /* TaskSearch.swift */,
 			);
-			name = macOS;
 			path = macOS;
 			sourceTree = "<group>";
 		};
@@ -556,7 +551,6 @@
 				E6AC033E6C6CB3AA8E0D445E /* IOSSyncStatusBar.swift */,
 				801848850647C8E8FA92DF3E /* IOSUndoToast.swift */,
 			);
-			name = iOS;
 			path = iOS;
 			sourceTree = "<group>";
 		};
@@ -582,7 +576,6 @@
 				78A38C186C6364ED942643D4 /* Assets.xcassets */,
 				5BE402310D054B4F6E5246A2 /* Resources */,
 			);
-			name = todarchy;
 			path = todarchy;
 			sourceTree = "<group>";
 		};
@@ -649,12 +642,10 @@
 				Base,
 			);
 			mainGroup = 05D4D86D61ACD117B82BC50D;
-			minimizedProjectReferenceProxies = 0;
 			packageReferences = (
 				8E5B52D9C0F31614C783E18D /* XCRemoteSwiftPackageReference "automerge-swift" */,
-				B2B8AE21BE62DF69EAB6A96A /* XCLocalSwiftPackageReference "Argon2" */,
+				B2B8AE21BE62DF69EAB6A96A /* XCLocalSwiftPackageReference "Packages/Argon2" */,
 			);
-			preferredProjectObjectVersion = 77;
 			productRefGroup = A738C7282D763CD6ED86F4E8 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -855,18 +846,25 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = todarchy/macOS/todarchy.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = 2XTDTDNRPD;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = todarchy/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
-				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.todarchy.app;
 				PRODUCT_NAME = todarchy;
 				SDKROOT = auto;
@@ -950,8 +948,15 @@
 					"$(DEVELOPER_FRAMEWORKS_DIR)",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
-				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.todarchy.app.tests;
@@ -978,8 +983,15 @@
 					"$(DEVELOPER_FRAMEWORKS_DIR)",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
-				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.todarchy.app.tests;
@@ -1063,18 +1075,25 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = todarchy/macOS/todarchy.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = 2XTDTDNRPD;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = todarchy/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
-				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.todarchy.app;
 				PRODUCT_NAME = todarchy;
 				SDKROOT = auto;
@@ -1121,7 +1140,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		B2B8AE21BE62DF69EAB6A96A /* XCLocalSwiftPackageReference "Argon2" */ = {
+		B2B8AE21BE62DF69EAB6A96A /* XCLocalSwiftPackageReference "Packages/Argon2" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/Argon2;
 		};
@@ -1141,12 +1160,12 @@
 /* Begin XCSwiftPackageProductDependency section */
 		2B1CBBB1158244E942BF5ECF /* Argon2 */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = B2B8AE21BE62DF69EAB6A96A /* XCLocalSwiftPackageReference "Argon2" */;
+			package = B2B8AE21BE62DF69EAB6A96A /* XCLocalSwiftPackageReference "Packages/Argon2" */;
 			productName = Argon2;
 		};
 		383EA2E806275AC85CAC0F47 /* Argon2 */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = B2B8AE21BE62DF69EAB6A96A /* XCLocalSwiftPackageReference "Argon2" */;
+			package = B2B8AE21BE62DF69EAB6A96A /* XCLocalSwiftPackageReference "Packages/Argon2" */;
 			productName = Argon2;
 		};
 		8413870526983C9A23FE9133 /* Automerge */ = {

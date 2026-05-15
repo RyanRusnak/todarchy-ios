@@ -13,6 +13,9 @@ struct ListSwitcherSheet: View {
     @FocusState private var nameFieldFocused: Bool
     /// Transient banner at the top of the sheet for share outcomes.
     @State private var shareBanner: (text: String, isError: Bool)?
+    /// Project the user is being asked to confirm-delete. Drives the
+    /// destructive alert; nil dismisses.
+    @State private var pendingDelete: ProjectItem?
     let onClose: () -> Void
     var onRequestSettings: () -> Void = {}
 
@@ -135,6 +138,27 @@ struct ListSwitcherSheet: View {
             }
         }
         .background(Theme.bgElev.ignoresSafeArea())
+        .alert(
+            "Delete project?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { project in
+            Button("Delete", role: .destructive) {
+                store.deleteProject(id: project.id)
+                pendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: { project in
+            let count = store.countOpen(in: project.id)
+            if count == 0 {
+                Text("Remove \"\(project.name)\". This can be undone with ⌘Z.")
+            } else {
+                Text("Remove \"\(project.name)\" and its \(count) open task\(count == 1 ? "" : "s"). This can be undone with ⌘Z.")
+            }
+        }
     }
 
     private func beginNewProject() {
@@ -220,6 +244,11 @@ struct ListSwitcherSheet: View {
                     handleShareTap(list)
                 } label: {
                     Label("Share…", systemImage: "person.crop.circle.badge.plus")
+                }
+                Button(role: .destructive) {
+                    pendingDelete = list
+                } label: {
+                    Label("Delete project", systemImage: "trash")
                 }
             }
         }
