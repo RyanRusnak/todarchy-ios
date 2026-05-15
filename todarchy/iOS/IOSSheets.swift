@@ -139,26 +139,50 @@ struct ListSwitcherSheet: View {
         }
         .background(Theme.bgElev.ignoresSafeArea())
         .alert(
-            "Delete project?",
+            pendingDelete?.isShared == true ? "Leave shared project?" : "Delete project?",
             isPresented: Binding(
                 get: { pendingDelete != nil },
                 set: { if !$0 { pendingDelete = nil } }
             ),
             presenting: pendingDelete
         ) { project in
-            Button("Delete", role: .destructive) {
-                store.deleteProject(id: project.id)
+            Button(project.isShared ? "Leave" : "Delete", role: .destructive) {
+                performDestructive(on: project)
                 pendingDelete = nil
             }
             Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: { project in
-            let count = store.countOpen(in: project.id)
-            if count == 0 {
-                Text("Remove \"\(project.name)\". This can be undone with ⌘Z.")
-            } else {
-                Text("Remove \"\(project.name)\" and its \(count) open task\(count == 1 ? "" : "s"). This can be undone with ⌘Z.")
-            }
+            Text(deleteAlertMessage(for: project))
         }
+    }
+
+    private func performDestructive(on project: ProjectItem) {
+        if project.isShared {
+            guard let manager = syncSettings.sharedProjectManager else {
+                flashBanner("Sync isn't set up — can't leave a shared project.", isError: true)
+                return
+            }
+            do {
+                try store.leaveSharedProject(project.id, manager: manager)
+            } catch let err as TaskStore.ShareError {
+                flashBanner(err.errorDescription ?? "Couldn't leave shared project.", isError: true)
+            } catch {
+                flashBanner(error.localizedDescription, isError: true)
+            }
+        } else {
+            store.deleteProject(id: project.id)
+        }
+    }
+
+    private func deleteAlertMessage(for project: ProjectItem) -> String {
+        if project.isShared {
+            return "Remove \"\(project.name)\" from this device. It'll stay available for anyone you shared it with."
+        }
+        let count = store.countOpen(in: project.id)
+        if count == 0 {
+            return "Remove \"\(project.name)\". This can be undone with ⌘Z."
+        }
+        return "Remove \"\(project.name)\" and its \(count) open task\(count == 1 ? "" : "s"). This can be undone with ⌘Z."
     }
 
     private func beginNewProject() {
@@ -238,6 +262,11 @@ struct ListSwitcherSheet: View {
                     handleShareTap(list)
                 } label: {
                     Label("Copy share link", systemImage: "link")
+                }
+                Button(role: .destructive) {
+                    pendingDelete = list
+                } label: {
+                    Label("Leave shared project", systemImage: "person.crop.circle.badge.xmark")
                 }
             } else {
                 Button {

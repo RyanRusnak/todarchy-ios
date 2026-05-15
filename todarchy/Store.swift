@@ -461,6 +461,59 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    /// "Leave shared project" — drop a shared project locally without
+    /// affecting collaborators.
+    ///
+    /// Differs from `deleteProject` in three ways:
+    ///   1. We never tombstone the project's tasks. They live in the
+    ///      encrypted envelope on the relay; tombstoning them here
+    ///      would propagate via shared-store sync and delete them
+    ///      for every peer.
+    ///   2. We drop the local key + local encrypted file via
+    ///      `SharedProjectManager.forgetLocally` so the bytes don't
+    ///      stick around uselessly.
+    ///   3. We unpublish the project's key from this user's
+    ///      `shareKeys.cipher` (best-effort, requires the master key
+    ///      to be unlocked) so the user's *other* devices also drop
+    ///      the project on next sync. The project tombstone in main
+    ///      doc takes care of the rest.
+    ///
+    /// Falls back to `deleteProject` for non-shared projects so the
+    /// caller doesn't have to branch.
+    @MainActor
+    func leaveSharedProject(_ projectId: String, manager: SharedProjectManager) throws {
+        guard let project = projects.first(where: { $0.id == projectId }) else {
+            throw ShareError.projectNotFound
+        }
+        guard project.isShared else {
+            deleteProject(id: projectId)
+            return
+        }
+
+        // Best-effort: remove the key from the user's main-doc
+        // shareKeys map. If the user is locked, the key stays in
+        // the map and any of their other devices will hang onto a
+        // dangling key (harmless, just untidy).
+        if let masterK = MasterKey.shared.currentKey {
+            try? persistence?.unpublishShareKey(projectId: projectId, masterKey: masterK)
+        }
+
+        // Forget the local key + encrypted file.
+        try manager.forgetLocally(projectId: projectId)
+
+        // Tombstone the project record so the user's other devices
+        // also drop it on next merge. Do NOT mark tasks deleted —
+        // they belong to the shared envelope, which we're leaving
+        // intact for peers.
+        snapshot()
+        markProjectDeleted(projectId)
+        projects.removeAll { $0.id == projectId }
+        tasks.removeAll { $0.list == projectId }
+        if case .list(let sel) = activeSelection, sel == projectId {
+            activeSelection = .list("inbox")
+        }
+    }
+
     // MARK: - Sharing
 
     enum ShareError: Error, LocalizedError, Equatable {

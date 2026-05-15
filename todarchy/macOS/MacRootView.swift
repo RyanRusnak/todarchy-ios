@@ -144,7 +144,13 @@ enum VimMode: String {
 
 private struct MacSidebar: View {
     @EnvironmentObject var store: TaskStore
+    @ObservedObject private var syncSettings = SyncSettings.shared
     @State private var showContextEditor: Bool = false
+    /// Drives the destructive confirmation alert when the user picks
+    /// "Delete project" or "Leave shared project" from a row's
+    /// context menu. Nil = no alert showing.
+    @State private var pendingDelete: ProjectItem?
+    @State private var deleteError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -185,6 +191,63 @@ private struct MacSidebar: View {
                 .environmentObject(store)
                 .preferredColorScheme(.dark)
         }
+        .alert(
+            pendingDelete?.isShared == true ? "Leave shared project?" : "Delete project?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { project in
+            Button(project.isShared ? "Leave" : "Delete", role: .destructive) {
+                performDestructive(on: project)
+                pendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: { project in
+            Text(deleteAlertMessage(for: project))
+        }
+        .alert(
+            "Couldn't leave shared project",
+            isPresented: Binding(
+                get: { deleteError != nil },
+                set: { if !$0 { deleteError = nil } }
+            ),
+            presenting: deleteError
+        ) { _ in
+            Button("OK", role: .cancel) { deleteError = nil }
+        } message: { msg in
+            Text(msg)
+        }
+    }
+
+    private func performDestructive(on project: ProjectItem) {
+        if project.isShared {
+            guard let manager = syncSettings.sharedProjectManager else {
+                deleteError = "Sync isn't set up — can't leave a shared project."
+                return
+            }
+            do {
+                try store.leaveSharedProject(project.id, manager: manager)
+            } catch let err as TaskStore.ShareError {
+                deleteError = err.errorDescription ?? "Couldn't leave shared project."
+            } catch {
+                deleteError = error.localizedDescription
+            }
+        } else {
+            store.deleteProject(id: project.id)
+        }
+    }
+
+    private func deleteAlertMessage(for project: ProjectItem) -> String {
+        if project.isShared {
+            return "Remove \"\(project.name)\" from this device. It'll stay available for anyone you shared it with."
+        }
+        let count = store.countOpen(in: project.id)
+        if count == 0 {
+            return "Remove \"\(project.name)\". This can be undone with ⌘Z."
+        }
+        return "Remove \"\(project.name)\" and its \(count) open task\(count == 1 ? "" : "s"). This can be undone with ⌘Z."
     }
 
     private var contextsHeader: some View {
@@ -258,6 +321,24 @@ private struct MacSidebar: View {
         .onTapGesture {
             store.activeSelection = .list(list.id)
             store.activeContextFilter = nil
+        }
+        .contextMenu {
+            if list.isInbox {
+                // Inbox isn't deletable / shareable. Empty menu so
+                // a right-click doesn't suggest actions that won't work.
+            } else if list.isShared {
+                Button(role: .destructive) {
+                    pendingDelete = list
+                } label: {
+                    Label("Leave shared project", systemImage: "person.crop.circle.badge.xmark")
+                }
+            } else {
+                Button(role: .destructive) {
+                    pendingDelete = list
+                } label: {
+                    Label("Delete project", systemImage: "trash")
+                }
+            }
         }
     }
 
