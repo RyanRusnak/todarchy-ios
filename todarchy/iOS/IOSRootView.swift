@@ -614,14 +614,23 @@ private struct IOSQuickAddBar: View {
                     } else {
                         text = trimmed
                         commit()
-                        tfFocus = false
+                        // Keep tfFocus = true — same save+ semantics
+                        // as the visible button. User dismisses
+                        // explicitly when done batch-entering.
                     }
                 }
 
                 if tfFocus {
-                    Button("save") {
+                    // save+ = commit and stay focused for the next
+                    // task. Optimized for batch capture (grocery
+                    // lists, brain dumps). Single-task users dismiss
+                    // the keyboard with the standard swipe-down /
+                    // tap-outside.
+                    Button("save+") {
                         commit()
-                        tfFocus = false
+                        // Intentionally keep tfFocus = true so the
+                        // keyboard stays up. `commit` clears the
+                        // text via the parent's closure.
                     }
                     .font(Typo.mono(12, weight: .semibold))
                     .foregroundStyle(Theme.bg)

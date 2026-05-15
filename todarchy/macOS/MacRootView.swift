@@ -39,10 +39,15 @@ struct MacRootView: View {
         }
         .sheet(isPresented: $showCapture) {
             MacCaptureWindow(text: $captureText,
-                             onCommit: {
+                             onCommit: { stayOpen in
                                  store.add(raw: captureText)
                                  captureText = ""
-                                 showCapture = false
+                                 if !stayOpen { showCapture = false }
+                                 // stayOpen = true keeps the sheet
+                                 // up; the TextField stays focused
+                                 // because `focus = true` is set on
+                                 // .onAppear and SwiftUI doesn't
+                                 // re-init the view here.
                              },
                              onCancel: { showCapture = false })
             .frame(width: 560)

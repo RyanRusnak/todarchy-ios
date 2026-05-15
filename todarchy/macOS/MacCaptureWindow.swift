@@ -5,7 +5,11 @@ struct MacCaptureWindow: View {
     @EnvironmentObject var store: TaskStore
     @Binding var text: String
     @FocusState private var focus: Bool
-    let onCommit: () -> Void
+    /// `stayOpen = true` is the "save+" / batch-capture flow: commit
+    /// the task and keep the capture sheet open with the field still
+    /// focused so the user can type the next one. `false` is the
+    /// normal one-shot save.
+    let onCommit: (_ stayOpen: Bool) -> Void
     let onCancel: () -> Void
 
     var body: some View {
@@ -38,7 +42,7 @@ struct MacCaptureWindow: View {
                 .lineLimit(1...8)
                 .onSubmit {
                     guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                    onCommit()
+                    onCommit(false)
                 }
                 .onExitCommand { onCancel() }
             }
@@ -73,6 +77,7 @@ struct MacCaptureWindow: View {
 
             HStack {
                 Text("⌘↵ save").font(Typo.mono(10)).foregroundStyle(Theme.fgFaint)
+                Text("⌘⇧↵ save+").font(Typo.mono(10)).foregroundStyle(Theme.fgFaint)
                 Text("⎋ cancel").font(Typo.mono(10)).foregroundStyle(Theme.fgFaint)
                 Text("⇥ list").font(Typo.mono(10)).foregroundStyle(Theme.fgFaint)
                 Spacer()
@@ -84,7 +89,20 @@ struct MacCaptureWindow: View {
                     .background(Theme.bgSoft)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
 
-                Button("save →") { onCommit() }
+                // save+ = commit and keep the capture window open
+                // for the next task. Outlined treatment so it reads
+                // as the secondary action next to the primary save.
+                Button("save+") { onCommit(true) }
+                    .buttonStyle(.plain)
+                    .font(Typo.mono(12, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.accent.opacity(0.5), lineWidth: 1))
+                    .disabled(parsed.title.isEmpty)
+                    .opacity(parsed.title.isEmpty ? 0.5 : 1)
+                    .keyboardShortcut(.return, modifiers: [.command, .shift])
+
+                Button("save →") { onCommit(false) }
                     .buttonStyle(.plain)
                     .font(Typo.mono(12, weight: .bold))
                     .foregroundStyle(Theme.bg)

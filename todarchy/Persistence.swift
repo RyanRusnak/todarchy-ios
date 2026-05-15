@@ -484,48 +484,81 @@ final class TaskStorePersistence {
     /// Automerge, since the CRDT makes every pull idempotent.
     private func pullMainFromServerSync() {
         guard let client = serverClient, let id = serverMainDocId else { return }
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
+        let semaphore = DispatchSemaphore(value: 0)
+        let result = PullBox()
+
+        Task.detached(priority: .userInitiated) { [result] in
             do {
-                guard let result = try await client.get(id) else { return }
-                self.queue.async { [weak self] in
-                    guard let self else { return }
-                    _ = self.mergeOrRebuild(result.0)
-                    DispatchQueue.main.async {
-                        SyncSettings.shared.markServerHealth(.ok)
-                        self.onExternalChange?()
-                    }
+                if let response = try await client.get(id) {
+                    result.bytes = response.0
                 }
             } catch {
-                await MainActor.run {
-                    SyncSettings.shared.markServerHealth(.failing(error.localizedDescription))
-                }
+                result.error = error
+            }
+            semaphore.signal()
+        }
+
+        // Block the persistence queue until the round-trip completes
+        // (or the timeout fires). This is load-bearing: the caller —
+        // typically `flushNow` — is about to write its local state to
+        // disk + push it to the relay. If we don't merge peer changes
+        // first, we'll overwrite whatever a peer just pushed.
+        // Timeout keeps the queue from stalling on a dead server; 5 s
+        // is generous for a healthy relay round-trip.
+        _ = semaphore.wait(timeout: .now() + 5)
+
+        if let bytes = result.bytes {
+            _ = mergeOrRebuild(bytes)
+            DispatchQueue.main.async {
+                SyncSettings.shared.markServerHealth(.ok)
+            }
+        } else if let error = result.error {
+            DispatchQueue.main.async {
+                SyncSettings.shared.markServerHealth(.failing(error.localizedDescription))
             }
         }
     }
 
-    /// Async pull of a shared-project envelope. Mirror of
-    /// `pullMainFromServerSync`. Merging hops back onto `queue` so all
-    /// Automerge operations stay single-threaded.
+    /// Synchronous pull of a shared-project envelope. Same blocking
+    /// semantics + same rationale as `pullMainFromServerSync` — peer
+    /// changes to the shared store have to land before we push or
+    /// they get clobbered.
     private func pullSharedFromServerSync(projectId: String, store: PerProjectStore) {
         guard let client = serverClient else { return }
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
+        let semaphore = DispatchSemaphore(value: 0)
+        let result = PullBox()
+
+        Task.detached(priority: .userInitiated) { [result] in
             do {
-                guard let result = try await client.get(projectId) else { return }
-                self.queue.async { [weak self] in
-                    guard let self else { return }
-                    _ = store.merge(encryptedBytes: result.0)
-                    DispatchQueue.main.async {
-                        self.onExternalChange?()
-                    }
+                if let response = try await client.get(projectId) {
+                    result.bytes = response.0
                 }
             } catch {
-                #if DEBUG
-                print("todarchy: server GET \(projectId) failed: \(error.localizedDescription)")
-                #endif
+                result.error = error
             }
+            semaphore.signal()
         }
+
+        _ = semaphore.wait(timeout: .now() + 5)
+
+        if let bytes = result.bytes {
+            _ = store.merge(encryptedBytes: bytes)
+        } else if let error = result.error {
+            #if DEBUG
+            print("todarchy: server GET \(projectId) failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    /// Mutable box for shuttling a network response from a detached
+    /// `Task` back to the persistence queue, paired with a
+    /// `DispatchSemaphore`. The semaphore's signal/wait pair is what
+    /// gives us the happens-before relationship that makes mutating
+    /// these fields from the Task and reading them after `wait` safe
+    /// without an explicit lock.
+    private final class PullBox: @unchecked Sendable {
+        var bytes: Data?
+        var error: Error?
     }
 
     /// Push the given main-doc bytes to the relay. Unconditional PUT —
