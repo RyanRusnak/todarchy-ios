@@ -294,7 +294,13 @@ private struct IOSListChips: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 16)
+                // Outer inset is sized so the first and last chip can
+                // scroll all the way to the viewport's center —
+                // otherwise `selectClosest` can never pick them and the
+                // edges are tap-only. 30pt ≈ half the narrowest chip;
+                // 16pt floor keeps a small viewport from collapsing
+                // the inset to zero.
+                .padding(.horizontal, max(16, viewportMidX - 30))
                 .padding(.bottom, 12)
             }
             .coordinateSpace(name: Self.viewportSpace)
