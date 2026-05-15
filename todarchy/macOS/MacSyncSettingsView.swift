@@ -6,6 +6,7 @@ import AppKit
 /// `Shared/` so iOS shares the persistence/bookmark logic.
 struct SyncSettingsView: View {
     @ObservedObject var settings = SyncSettings.shared
+    @ObservedObject var masterKey = MasterKey.shared
     let persistence: TaskStorePersistence
 
     @State private var showPicker = false
@@ -14,6 +15,8 @@ struct SyncSettingsView: View {
     @State private var serverUrlError: String?
     @State private var serverIdError: String?
     @State private var healthCheck: String?
+    @State private var showPassphraseSheet = false
+    @State private var passphraseSheetMode: PassphraseSetupView.Mode = .createNew
 
     /// The segment the user is viewing. Separate from `settings.mode` so
     /// tapping "Server" reveals the config form before Connect actually
@@ -32,6 +35,7 @@ struct SyncSettingsView: View {
             modePicker
             SyncStatusBlock(settings: settings)
             modeControls
+            passphraseSection
             SyncExplanation()
             Spacer()
         }
@@ -56,6 +60,98 @@ struct SyncSettingsView: View {
             // drag the picker along.
             stagedKind = newMode.kind
         }
+        .sheet(isPresented: $showPassphraseSheet) {
+            PassphraseSetupView(
+                mode: passphraseSheetMode,
+                onSubmit: { passphrase in
+                    switch passphraseSheetMode {
+                    case .rotate:
+                        try await persistence.rotatePassphrase(passphrase)
+                    case .createNew, .enterExisting:
+                        try await persistence.setupPassphrase(passphrase)
+                    }
+                    showPassphraseSheet = false
+                },
+                onCancel: { showPassphraseSheet = false }
+            )
+        }
+    }
+
+    // MARK: - Passphrase section
+
+    @ViewBuilder
+    private var passphraseSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("PASSPHRASE")
+                .font(Typo.mono(10, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(Theme.fgMute)
+                .padding(.top, 4)
+            HStack(spacing: 10) {
+                Image(systemName: passphraseStatusIcon)
+                    .font(.system(size: 13))
+                    .foregroundStyle(passphraseStatusTint)
+                Text(passphraseStatusText)
+                    .font(Typo.mono(12))
+                    .foregroundStyle(Theme.fg)
+                Spacer()
+                Button(passphraseButtonLabel) {
+                    passphraseSheetMode = nextPassphraseMode
+                    showPassphraseSheet = true
+                }
+                .buttonStyle(.plain)
+                .font(Typo.mono(12, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.accent.opacity(0.5), lineWidth: 1))
+            }
+            Text(passphraseHelperText)
+                .font(Typo.mono(10))
+                .foregroundStyle(Theme.fgFaint)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var passphraseStatusIcon: String {
+        if masterKey.currentKey != nil { return "checkmark.circle.fill" }
+        return persistence.hasShareKeysSalt ? "lock.fill" : "circle"
+    }
+
+    private var passphraseStatusTint: Color {
+        if masterKey.currentKey != nil { return Theme.accent }
+        return persistence.hasShareKeysSalt ? Theme.danger : Theme.fgMute
+    }
+
+    private var passphraseStatusText: String {
+        if masterKey.currentKey != nil { return "Passphrase set" }
+        return persistence.hasShareKeysSalt
+            ? "Locked — passphrase required"
+            : "No passphrase yet"
+    }
+
+    private var passphraseButtonLabel: String {
+        if masterKey.currentKey != nil { return "Change…" }
+        return persistence.hasShareKeysSalt ? "Unlock…" : "Set passphrase…"
+    }
+
+    private var passphraseHelperText: String {
+        if masterKey.currentKey != nil {
+            return "Shared lists you make or accept will propagate to your other devices automatically."
+        }
+        if persistence.hasShareKeysSalt {
+            return "Another of your devices already set a passphrase. Enter it on this device to access shared lists."
+        }
+        return "Setting a passphrase lets shared lists sync across your own devices without re-opening share links on each."
+    }
+
+    /// Pick the right `PassphraseSetupView.Mode` for the button:
+    ///   - unlocked              → `.rotate` (change)
+    ///   - salt present + locked → `.enterExisting` (unlock)
+    ///   - everything else       → `.createNew` (first-time setup)
+    private var nextPassphraseMode: PassphraseSetupView.Mode {
+        if masterKey.currentKey != nil { return .rotate }
+        if persistence.hasShareKeysSalt { return .enterExisting }
+        return .createNew
     }
 
     // MARK: - Mode picker

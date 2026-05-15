@@ -9,6 +9,10 @@ protocol KeyStore {
     func save(_ key: SymmetricKey, for projectId: String) throws
     func load(for projectId: String) -> SymmetricKey?
     func delete(for projectId: String)
+    /// All project ids that currently have a key in this store. Used
+    /// by the passphrase-setup migration to publish existing local
+    /// keys into the user's main doc on first-time setup.
+    func allProjectIds() -> [String]
 }
 
 // MARK: - Keychain implementation
@@ -92,6 +96,24 @@ final class KeychainKeyStore: KeyStore {
         _ = SecItemDelete(query as CFDictionary)
     }
 
+    func allProjectIds() -> [String] {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        if synchronizable {
+            query[kSecAttrSynchronizable as String] = kCFBooleanTrue
+        }
+        var items: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &items)
+        guard status == errSecSuccess, let array = items as? [[String: Any]] else {
+            return []
+        }
+        return array.compactMap { $0[kSecAttrAccount as String] as? String }
+    }
+
     // MARK: -
 
     private func baseQuery(for projectId: String) -> [String: Any] {
@@ -131,5 +153,10 @@ final class InMemoryKeyStore: KeyStore {
     func delete(for projectId: String) {
         lock.lock(); defer { lock.unlock() }
         storage.removeValue(forKey: projectId)
+    }
+
+    func allProjectIds() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(storage.keys)
     }
 }

@@ -54,6 +54,29 @@ final class InMemoryKeyStoreTests: XCTestCase {
         XCTAssertNil(store.load(for: "project_a"))
         XCTAssertNotNil(store.load(for: "project_b"))
     }
+
+    // MARK: - allProjectIds
+
+    func testAllProjectIdsEmptyByDefault() {
+        let store = InMemoryKeyStore()
+        XCTAssertEqual(store.allProjectIds(), [])
+    }
+
+    func testAllProjectIdsListsSavedIds() throws {
+        let store = InMemoryKeyStore()
+        try store.save(CryptoBox.generateKey(), for: "p_a")
+        try store.save(CryptoBox.generateKey(), for: "p_b")
+        try store.save(CryptoBox.generateKey(), for: "p_c")
+        XCTAssertEqual(Set(store.allProjectIds()), ["p_a", "p_b", "p_c"])
+    }
+
+    func testAllProjectIdsReflectsDeletes() throws {
+        let store = InMemoryKeyStore()
+        try store.save(CryptoBox.generateKey(), for: "p_a")
+        try store.save(CryptoBox.generateKey(), for: "p_b")
+        store.delete(for: "p_a")
+        XCTAssertEqual(store.allProjectIds(), ["p_b"])
+    }
 }
 
 /// KeychainKeyStore tests hit the real keychain. They're gated by an

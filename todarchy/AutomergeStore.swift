@@ -386,6 +386,107 @@ final class AutomergeStore {
         }
     }
 
+    // MARK: - Share keys
+    //
+    // Top-level `shareKeys` map carries the per-user passphrase
+    // material:
+    //
+    //     shareKeys: {
+    //       version: Int64 = 1,        // wire-format version
+    //       salt:    Bytes(16),        // Argon2 salt
+    //       cipher:  Bytes(opt),       // sealed {projectId → keyBytes}
+    //     }
+    //
+    // The map is created lazily on first write — fresh docs without
+    // any shared lists carry no `shareKeys` field at all, which keeps
+    // their serialized bytes byte-stable for users who never share.
+    // Reads return nil for uninitialised fields rather than throwing.
+
+    /// Wire-format version of the share-keys blob, or nil if shareKeys
+    /// hasn't been initialised on this device.
+    func readShareKeysVersion() throws -> Int64? {
+        try locked {
+            guard let mapId = try shareKeysMapId() else { return nil }
+            return try intValue(obj: mapId, key: "version")
+        }
+    }
+
+    /// 16-byte salt used to derive the master key from the user's
+    /// passphrase. Nil if shareKeys hasn't been initialised yet.
+    func readShareKeysSalt() throws -> Data? {
+        try locked {
+            guard let mapId = try shareKeysMapId() else { return nil }
+            return try bytesValue(obj: mapId, key: "salt")
+        }
+    }
+
+    /// The sealed `{projectId → keyBytes}` blob (a `CryptoBox` envelope
+    /// produced by `ShareKeysMap.seal(with:)`). Nil if no shares have
+    /// been recorded yet, even when salt is set.
+    func readShareKeysCipher() throws -> Data? {
+        try locked {
+            guard let mapId = try shareKeysMapId() else { return nil }
+            return try bytesValue(obj: mapId, key: "cipher")
+        }
+    }
+
+    /// Write the salt. Stamps `version = 1` the first time. Idempotent
+    /// when the same salt is already present — important because the
+    /// caller may invoke this on every passphrase setup attempt.
+    func writeShareKeysSalt(_ salt: Data) throws {
+        try locked {
+            let mapId = try requireShareKeysMap()
+            // Always write version so older docs that pre-date the
+            // field pick it up too.
+            if try intValue(obj: mapId, key: "version") != 1 {
+                try doc.put(obj: mapId, key: "version", value: .Int(1))
+            }
+            if try bytesValue(obj: mapId, key: "salt") != salt {
+                try doc.put(obj: mapId, key: "salt", value: .Bytes(salt))
+            }
+        }
+    }
+
+    /// Write the sealed envelope. The caller is responsible for
+    /// producing this via `ShareKeysMap.seal(with:)` under the
+    /// current master key.
+    func writeShareKeysCipher(_ cipher: Data) throws {
+        try locked {
+            let mapId = try requireShareKeysMap()
+            try doc.put(obj: mapId, key: "cipher", value: .Bytes(cipher))
+        }
+    }
+
+    /// Wipe the entire `shareKeys` map. Used for the "Reset shared
+    /// lists" flow where the user forgot their passphrase — they
+    /// re-set one from scratch and re-accept share links.
+    func clearShareKeys() throws {
+        try locked {
+            // Only delete if it actually exists; otherwise we'd get
+            // a missing-key error from Automerge.
+            if try shareKeysMapId() != nil {
+                try? doc.delete(obj: ObjId.ROOT, key: "shareKeys")
+            }
+        }
+    }
+
+    private func shareKeysMapId() throws -> ObjId? {
+        guard case let .Object(objId, .Map) = try doc.get(obj: ObjId.ROOT, key: "shareKeys") else {
+            return nil
+        }
+        return objId
+    }
+
+    private func requireShareKeysMap() throws -> ObjId {
+        if let existing = try shareKeysMapId() { return existing }
+        return try doc.putObject(obj: ObjId.ROOT, key: "shareKeys", ty: .Map)
+    }
+
+    private func bytesValue(obj: ObjId, key: String) throws -> Data? {
+        if case let .Scalar(.Bytes(d)) = try doc.get(obj: obj, key: key) { return d }
+        return nil
+    }
+
     // MARK: - Primitive readers
 
     private func stringValue(obj: ObjId, key: String) throws -> String? {

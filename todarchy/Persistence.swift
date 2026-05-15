@@ -1,5 +1,6 @@
 import Foundation
 import Automerge
+import CryptoKit
 
 /// On-disk persistence backed by a single Automerge binary document.
 ///
@@ -225,6 +226,135 @@ final class TaskStorePersistence {
         }
     }
 
+    // MARK: - Share-keys publication
+
+    /// Publish a `(projectId, key)` into the main doc's `shareKeys.cipher`
+    /// so the user's other devices learn the key via main-doc sync,
+    /// then flush to disk and the server. Called from `TaskStore` right
+    /// after `SharedProjectManager.createShared` or `accept` succeeds.
+    /// Caller must pass the unlocked master key value — typically read
+    /// from `MasterKey.shared.currentKey` on the MainActor before
+    /// invoking this.
+    func publishShareKey(projectId: String,
+                         key: SymmetricKey,
+                         masterKey: SymmetricKey) throws {
+        try onQueue {
+            try ShareKeysSync.publish(projectId: projectId,
+                                      key: key,
+                                      masterKey: masterKey,
+                                      store: automerge)
+            try persistShareKeysMutation()
+        }
+    }
+
+    /// Inverse of `publishShareKey` — for the "leave shared project"
+    /// path. The encrypted envelope on the relay is left intact; only
+    /// this user's reference to the key is dropped from their main doc.
+    func unpublishShareKey(projectId: String, masterKey: SymmetricKey) throws {
+        try onQueue {
+            try ShareKeysSync.unpublish(projectId: projectId,
+                                        masterKey: masterKey,
+                                        store: automerge)
+            try persistShareKeysMutation()
+        }
+    }
+
+    /// True if the main doc carries a `shareKeys.salt`. Lets the
+    /// passphrase-setup UI decide between "create new" and "enter
+    /// existing" mode without reaching into AutomergeStore.
+    /// Thread-safe (AutomergeStore has its own lock).
+    var hasShareKeysSalt: Bool {
+        (try? automerge.readShareKeysSalt()) != nil
+    }
+
+    /// Rotate the user's passphrase. Generates a new salt, derives a
+    /// new master key, re-encrypts the existing shareKeys cipher.
+    /// Other devices detect the salt change and prompt for the new
+    /// passphrase.
+    @MainActor
+    func rotatePassphrase(_ newPassphrase: String) async throws {
+        try await ShareKeysSync.shared.rotatePassphrase(newPassphrase, store: automerge)
+        try onQueue {
+            try persistShareKeysMutation()
+        }
+    }
+
+    /// Wire `ShareKeysSync.setupPassphrase` to the live AutomergeStore
+    /// and flush the resulting `shareKeys.salt` (and any decrypted
+    /// keys imported) to disk + server. Called by the passphrase
+    /// setup sheet in Settings.
+    ///
+    /// Throws:
+    ///   - `ShareKeysSync.Error.wrongPassphrase` when the doc already
+    ///     has a sealed cipher and `passphrase` doesn't open it
+    ///   - underlying keychain / disk errors on save
+    @MainActor
+    func setupPassphrase(_ passphrase: String) async throws {
+        // The setupPassphrase call writes salt to the in-memory doc
+        // (and may import keys into the keychain on a second-device
+        // join). Both are MainActor-safe because AutomergeStore has
+        // its own internal lock.
+        try await ShareKeysSync.shared.setupPassphrase(passphrase, store: automerge)
+
+        // Migrate any existing keychain keys into the doc cipher.
+        // This is the path for existing TestFlight testers whose
+        // share keys live only in the local keychain — after first
+        // passphrase setup, those keys get published to main doc so
+        // their other devices auto-learn them. Idempotent (no-op
+        // when the cipher already contains the keys).
+        if let masterK = MasterKey.shared.currentKey {
+            _ = try? ShareKeysSync.migrateLocalKeys(
+                keyStore: ShareKeysSync.shared.keyStore,
+                masterKey: masterK,
+                store: automerge
+            )
+        }
+
+        // Flush salt (+ migrated cipher) to disk and push to server
+        // so the user's other devices can derive the same master key
+        // and read the keys we just migrated.
+        try onQueue {
+            try persistShareKeysMutation()
+        }
+    }
+
+    /// After a main-doc merge (disk read, server pull, etc.) call
+    /// `ShareKeysSync.adoptFromDoc` so any keys peers published get
+    /// imported into the local keychain. Hops to the MainActor
+    /// because adopt touches `MasterKey` state. Fire-and-forget — the
+    /// next merge tick will retry on transient failure.
+    private func adoptShareKeysFromDoc() {
+        let store = automerge
+        Task { @MainActor in
+            do {
+                _ = try ShareKeysSync.shared.adoptFromDoc(store)
+            } catch {
+                #if DEBUG
+                print("todarchy: adoptShareKeysFromDoc failed: \(error)")
+                #endif
+            }
+        }
+    }
+
+    /// Save the doc to disk and push to the server. Used as the
+    /// commit step after a `publishShareKey` / `unpublishShareKey`.
+    /// Must be called from the persistence queue.
+    private func persistShareKeysMutation() throws {
+        var mainBytesForServer: Data?
+        let ok = retryOnPoison {
+            let bytes = automerge.save()
+            try writeBytes(bytes)
+            mainBytesForServer = bytes
+        }
+        guard ok else { return }
+        if let bytes = mainBytesForServer {
+            pushMainToServer(bytes)
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.onExternalChange?()
+        }
+    }
+
     private func flushNow() {
         saveWork?.cancel()
         saveWork = nil
@@ -243,6 +373,13 @@ final class TaskStorePersistence {
 
         // 2. Pull in any conflict copies the sync daemon created.
         ingestConflictCopies()
+
+        // 2b. Adopt any new share keys peers published into the main
+        //     doc since we last synced. Reads `shareKeys.cipher`,
+        //     decrypts with the cached master key, and writes any
+        //     newly-known keys into the local keychain. Hops to the
+        //     MainActor because it touches `MasterKey`.
+        adoptShareKeysFromDoc()
 
         // 3. Refresh shared-store roster against the latest main-doc
         //    project list — promotions done this tick will have flipped
@@ -489,6 +626,11 @@ final class TaskStorePersistence {
                 _ = mergeOrRebuild(bytes)
             }
             ingestConflictCopies()
+
+            // After the main doc reconciles, adopt any share keys peers
+            // published — same as in flushNow's step 2b. Hops to the
+            // MainActor because adopt touches `MasterKey`.
+            adoptShareKeysFromDoc()
 
             // Now that the main doc is current, open any newly shared
             // projects and pull each store's envelope bytes from both

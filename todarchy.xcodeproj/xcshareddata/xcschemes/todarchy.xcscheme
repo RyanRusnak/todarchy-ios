@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
-   LastUpgradeVersion = "1300"
+   LastUpgradeVersion = "1600"
    version = "1.3">
    <BuildAction
       parallelizeBuildables = "YES"
@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "7DD85570AA1D1759E6EFD715"
+               BlueprintIdentifier = "EB560393F9A7D5C51B8FC9F2"
                BuildableName = "todarchy.app"
                BlueprintName = "todarchy"
                ReferencedContainer = "container:todarchy.xcodeproj">
@@ -30,7 +30,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "7DD85570AA1D1759E6EFD715"
+            BlueprintIdentifier = "EB560393F9A7D5C51B8FC9F2"
             BuildableName = "todarchy.app"
             BlueprintName = "todarchy"
             ReferencedContainer = "container:todarchy.xcodeproj">
@@ -41,7 +41,7 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "A761F56D08C52FA6A511BF9E"
+               BlueprintIdentifier = "DCFCDC985C64B7A6718556FE"
                BuildableName = "todarchyTests.xctest"
                BlueprintName = "todarchyTests"
                ReferencedContainer = "container:todarchy.xcodeproj">
@@ -63,7 +63,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "7DD85570AA1D1759E6EFD715"
+            BlueprintIdentifier = "EB560393F9A7D5C51B8FC9F2"
             BuildableName = "todarchy.app"
             BlueprintName = "todarchy"
             ReferencedContainer = "container:todarchy.xcodeproj">
@@ -80,7 +80,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "7DD85570AA1D1759E6EFD715"
+            BlueprintIdentifier = "EB560393F9A7D5C51B8FC9F2"
             BuildableName = "todarchy.app"
             BlueprintName = "todarchy"
             ReferencedContainer = "container:todarchy.xcodeproj">

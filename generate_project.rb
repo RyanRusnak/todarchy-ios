@@ -214,6 +214,29 @@ build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
 build_file.product_ref = automerge_product
 target.frameworks_build_phase.files << build_file
 
+# ---- Local Argon2 SPM package ----
+# Vendors libargon2 (reference impl) for passphrase-derived master-key
+# derivation. Lives in `Packages/Argon2/`. Linked into both the app
+# target and the test target so MasterKey + its tests can derive keys.
+argon2_ref = project.root_object.package_references.find do |r|
+  r.respond_to?(:relative_path) && r.relative_path == 'Packages/Argon2'
+end
+
+unless argon2_ref
+  argon2_ref = project.new(Xcodeproj::Project::Object::XCLocalSwiftPackageReference)
+  argon2_ref.relative_path = 'Packages/Argon2'
+  project.root_object.package_references << argon2_ref
+end
+
+argon2_product = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+argon2_product.package = argon2_ref
+argon2_product.product_name = 'Argon2'
+target.package_product_dependencies << argon2_product
+
+argon2_build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
+argon2_build_file.product_ref = argon2_product
+target.frameworks_build_phase.files << argon2_build_file
+
 # ---- Test target ----
 test_target = project.new_target(:unit_test_bundle, 'todarchyTests', :osx, '14.0', nil, :swift)
 
@@ -280,6 +303,16 @@ test_target.package_product_dependencies << test_automerge_product
 test_build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
 test_build_file.product_ref = test_automerge_product
 test_target.frameworks_build_phase.files << test_build_file
+
+# Test target also links the local Argon2 package — MasterKey tests
+# call `Argon2.deriveKey` directly to verify derivation behavior.
+test_argon2_product = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+test_argon2_product.package = argon2_ref
+test_argon2_product.product_name = 'Argon2'
+test_target.package_product_dependencies << test_argon2_product
+test_argon2_build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
+test_argon2_build_file.product_ref = test_argon2_product
+test_target.frameworks_build_phase.files << test_argon2_build_file
 
 # Save scheme that includes tests
 project.save

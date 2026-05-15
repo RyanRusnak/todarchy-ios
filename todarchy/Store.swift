@@ -470,6 +470,7 @@ final class TaskStore: ObservableObject {
         case noSyncFolder
         case invalidLink(String)
         case keyPersistenceFailed(String)
+        case passphraseRequired
 
         var errorDescription: String? {
             switch self {
@@ -479,6 +480,7 @@ final class TaskStore: ObservableObject {
             case .noSyncFolder: return "Pick a sync folder in Settings before sharing."
             case .invalidLink(let why): return "That share link isn't valid: \(why)"
             case .keyPersistenceFailed(let why): return "Couldn't save the share key: \(why)"
+            case .passphraseRequired: return "Set a sync passphrase in Settings before sharing — keys can't propagate to your other devices without it."
             }
         }
     }
@@ -497,6 +499,7 @@ final class TaskStore: ObservableObject {
     /// then, a promoted project's tasks vanish from the main TaskStore
     /// snapshot until they're re-loaded through that path.
     @discardableResult
+    @MainActor
     func promoteToShared(_ projectId: String, manager: SharedProjectManager) throws -> URL {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             throw ShareError.projectNotFound
@@ -506,6 +509,18 @@ final class TaskStore: ObservableObject {
 
         let projectTasks = tasks.filter { $0.list == projectId }
         let created = try manager.createShared(project: project, tasks: projectTasks)
+
+        // Best-effort publish to the user's main doc so their other
+        // devices auto-learn the key via main-doc sync. Skipped (not
+        // a hard failure) when no passphrase is set up — sharing
+        // still works locally, the user just has to open the link
+        // on each of their devices manually. The Settings UI gates
+        // sharing on passphrase setup to avoid surprising users.
+        if let masterK = MasterKey.shared.currentKey {
+            try? persistence?.publishShareKey(projectId: projectId,
+                                              key: created.key,
+                                              masterKey: masterK)
+        }
 
         // Local main-doc cleanup: flag the project shared, tombstone
         // its tasks so the main doc no longer carries them. Snapshot
@@ -529,6 +544,7 @@ final class TaskStore: ObservableObject {
     /// Idempotent: if we've already joined this project (key in store +
     /// project in our list), this is a no-op success.
     @discardableResult
+    @MainActor
     func acceptShareLink(_ url: URL, manager: SharedProjectManager) throws -> ProjectItem {
         let payload: ShareLink.Payload
         switch ShareLink.decode(url) {
@@ -541,6 +557,7 @@ final class TaskStore: ObservableObject {
     /// Internal path used by both `acceptShareLink` and any caller that
     /// already has a decoded payload (e.g. pasted text UIs).
     @discardableResult
+    @MainActor
     func acceptPayload(_ payload: ShareLink.Payload,
                        manager: SharedProjectManager) throws -> ProjectItem {
         // Persist key + prepare a store handle. The file itself might
@@ -551,6 +568,19 @@ final class TaskStore: ObservableObject {
             store = try manager.accept(payload: payload)
         } catch {
             throw ShareError.keyPersistenceFailed(error.localizedDescription)
+        }
+
+        // Propagate the freshly-accepted key into the user's main
+        // doc's shareKeys map (when a passphrase has been set up).
+        // This is what lets their other devices pick up the new
+        // shared list without re-opening the same link there.
+        // If no master key is available yet, swallow silently — the
+        // key still lives in the local keychain, so this device can
+        // read the shared envelope; we just don't propagate to peers.
+        if let masterK = MasterKey.shared.currentKey {
+            try? persistence?.publishShareKey(projectId: payload.projectId,
+                                              key: payload.key,
+                                              masterKey: masterK)
         }
 
         // If the encrypted file already landed, pull the real project
