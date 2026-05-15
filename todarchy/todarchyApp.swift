@@ -28,6 +28,15 @@ struct TodarchyApp: App {
                 .onChange(of: themeName) { _, name in
                     ThemePalette.current = ThemePalette.named(name)
                 }
+                .onChange(of: scenePhase) { _, phase in
+                    // Switching back to the app pulls the latest
+                    // bytes — same pattern iOS uses. The 10 s timer
+                    // covers passive viewing; this catches "I was on
+                    // another app and just came back" instantly.
+                    if phase == .active {
+                        TaskStorePersistence.shared.refreshFromDisk()
+                    }
+                }
                 .onOpenURL { url in handleIncomingURL(url) }
                 .task {
                     DeferNotifier.shared.attach(store: store)

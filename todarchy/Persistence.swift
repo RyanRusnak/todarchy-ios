@@ -75,7 +75,7 @@ final class TaskStorePersistence {
     /// Server-side id for the main doc. Paired with `serverClient`.
     var serverMainDocId: String?
 
-    /// 30-second foreground poll timer. Fires `refreshFromDisk` so the
+    /// 10-second foreground poll timer. Fires `refreshFromDisk` so the
     /// existing pipeline picks up server changes alongside file
     /// changes. Started by `setFileURL` when the server client is
     /// installed; cancelled otherwise.
@@ -572,7 +572,11 @@ final class TaskStorePersistence {
         guard serverClient != nil else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            let t = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            // 10 s cadence — keeps ETag-cached GETs (304s) cheap and
+            // makes "peer added a task" land within ~10 s on the
+            // viewer. Server traffic is negligible because the relay
+            // returns 304 unless something actually changed.
+            let t = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
                 self?.refreshFromDisk()
             }
             // Keep firing while the run loop is busy with UI events.
@@ -615,7 +619,7 @@ final class TaskStorePersistence {
     /// Called on iOS when the app returns to the foreground (since
     /// DispatchSourceFileSystemObject doesn't fire for daemon-driven changes
     /// on iOS), as a manual "Refresh" affordance, and by the server poll
-    /// timer every 30 seconds when in server mode.
+    /// timer every 10 seconds when in server mode.
     func refreshFromDisk() {
         onQueue {
             // Pull from the server first so disk + server state reconcile
