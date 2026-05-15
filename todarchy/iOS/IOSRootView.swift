@@ -565,9 +565,15 @@ private struct IOSQuickAddBar: View {
                 QuickAddPreview(text: text)
             }
             HStack(spacing: 10) {
-                Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
+                Button {
+                    tfFocus = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add task")
 
                 TextField(text: $text, axis: .vertical) {
                     Text("add task…")
@@ -581,6 +587,29 @@ private struct IOSQuickAddBar: View {
                 .onSubmit {
                     guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                     commit()
+                }
+                // Return key submit. SwiftUI's `axis: .vertical` makes
+                // Return insert a newline by default and `.onSubmit`
+                // never fires. Intercept the keystroke: if a single
+                // character was just appended and it's a newline,
+                // treat it as a submit (strip the newline first so
+                // it doesn't end up in the task title). Pasted text
+                // with embedded newlines is left alone (we require
+                // count == oldValue.count + 1).
+                .onChange(of: text) { oldValue, newValue in
+                    guard newValue.count == oldValue.count + 1,
+                          newValue.last == "\n" else { return }
+                    let trimmed = String(newValue.dropLast())
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        // Lone Return on an empty field — drop the
+                        // newline without committing.
+                        text = ""
+                    } else {
+                        text = trimmed
+                        commit()
+                        tfFocus = false
+                    }
                 }
 
                 if tfFocus {
