@@ -1034,17 +1034,13 @@ final class TaskStorePersistence {
         }
     }
 
-    // MARK: - Snapshot type
+    // MARK: - Snapshot
 
-    struct Snapshot: Codable, Equatable {
-        var schema: Int = 1
-        var tasks: [TaskItem]
-        var projects: [ProjectItem]
-        /// User's context list. Optional in the wire format so older
-        /// snapshots without the field decode cleanly; missing/empty
-        /// means "fall back to the built-in seed set" at the call site.
-        var contexts: [TaskContext]? = nil
-    }
+    // `Snapshot` is now a top-level type (see `Snapshot.swift`) so the
+    // MCP CLI target can use it without pulling in Persistence's iOS-
+    // specific machinery. The typealias keeps existing call sites
+    // (`TaskStorePersistence.Snapshot.…`) working unchanged.
+    typealias Snapshot = TodarchySnapshot
 
     deinit {
         stopWatching()

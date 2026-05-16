@@ -115,6 +115,52 @@ enum DueBucket: String, CaseIterable, Identifiable, Codable {
 /// ids (short base36). Swift's `UUID(uuidString:)` returns nil for those,
 /// so any attempt to strict-parse silently drops tasks from the UI. Keep
 /// as `String`, validate elsewhere if you must.
+/// Append-only conversation entry on a task. Used for human↔human and
+/// human↔Claude back-and-forth. Edits / deletes are intentionally not
+/// supported in v1 — append-only keeps merge semantics simple and
+/// removes "who deleted that?" ambiguity between devices.
+struct Comment: Identifiable, Hashable, Codable {
+    var id: String = Self.newID()
+    /// Display name of whoever posted. Currently from a per-device
+    /// preference (UserDefaults), defaulting to "Me". MCP server
+    /// invocations will pass a configurable name (e.g. "Claude").
+    var author: String
+    var text: String
+    var createdAt: Date = Date()
+
+    static func newID() -> String { UUID().uuidString.lowercased() }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, author, text, createdAt
+    }
+
+    init(id: String = Comment.newID(),
+         author: String,
+         text: String,
+         createdAt: Date = Date()) {
+        self.id = id
+        self.author = author
+        self.text = text
+        self.createdAt = createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.author = try c.decode(String.self, forKey: .author)
+        self.text = try c.decode(String.self, forKey: .text)
+        self.createdAt = Date(millisecondsSince1970: try c.decode(Int64.self, forKey: .createdAt))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(author, forKey: .author)
+        try c.encode(text, forKey: .text)
+        try c.encode(createdAt.millisecondsSince1970, forKey: .createdAt)
+    }
+}
+
 struct TaskItem: Identifiable, Hashable, Codable {
     var id: String = Self.newID()
     var list: String                // "inbox" or "p_<id>"
@@ -129,6 +175,11 @@ struct TaskItem: Identifiable, Hashable, Codable {
     /// Manual sort key in ms-epoch. Defaults to `created`. Reordering mutates
     /// this so device A's reorder reaches device B through Automerge.
     var pos: Date?
+    /// Conversation entries on the task — see `Comment`. Append-only.
+    /// Stored in Automerge as a Map<commentId, Comment> so concurrent
+    /// inserts on two devices both survive merge (same load-bearing
+    /// rationale as tasks/projects keyed by id).
+    var comments: [Comment] = []
 
     var isDone: Bool { doneAt != nil }
     var isDeferred: Bool {
@@ -146,7 +197,7 @@ struct TaskItem: Identifiable, Hashable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case id, list, title, ctx, due, note
-        case created, doneAt, deferUntil, parent, pos
+        case created, doneAt, deferUntil, parent, pos, comments
     }
 
     init(
@@ -160,7 +211,8 @@ struct TaskItem: Identifiable, Hashable, Codable {
         deferUntil: Date? = nil,
         doneAt: Date? = nil,
         parent: String? = nil,
-        pos: Date? = nil
+        pos: Date? = nil,
+        comments: [Comment] = []
     ) {
         self.id = id
         self.list = list
@@ -172,6 +224,7 @@ struct TaskItem: Identifiable, Hashable, Codable {
         self.doneAt = doneAt
         self.deferUntil = deferUntil
         self.parent = parent
+        self.comments = comments
         self.pos = pos
     }
 
@@ -196,6 +249,9 @@ struct TaskItem: Identifiable, Hashable, Codable {
         if let ms = try c.decodeIfPresent(Int64.self, forKey: .pos) {
             self.pos = Date(millisecondsSince1970: ms)
         }
+        // Older docs / non-Swift peers won't include `comments`;
+        // default to an empty list so existing snapshots decode.
+        self.comments = (try? c.decode([Comment].self, forKey: .comments)) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -211,6 +267,9 @@ struct TaskItem: Identifiable, Hashable, Codable {
         try c.encodeIfPresent(deferUntil?.millisecondsSince1970, forKey: .deferUntil)
         try c.encodeIfPresent(parent, forKey: .parent)
         try c.encodeIfPresent(pos?.millisecondsSince1970, forKey: .pos)
+        if !comments.isEmpty {
+            try c.encode(comments, forKey: .comments)
+        }
     }
 }
 
@@ -226,31 +285,51 @@ struct ProjectItem: Identifiable, Hashable, Codable {
     /// false in older docs and on clients that don't implement sharing
     /// yet, so it's safe to introduce without a migration.
     var isShared: Bool = false
+    /// True when the user has granted the MCP server (Claude) read/write
+    /// access to this project's tasks. Synced via main-doc so the
+    /// "Claude can see X" toggle is visible on every device, even
+    /// though the MCP server itself only runs on the Mac (today).
+    /// Defaults to false — Claude access is opt-in.
+    var claudeAccess: Bool = false
 
     var accent: Color { Color(hex: accentHex) }
 
-    init(id: String, name: String, icon: String, accent: Color, isInbox: Bool = false, isShared: Bool = false) {
+    init(id: String,
+         name: String,
+         icon: String,
+         accent: Color,
+         isInbox: Bool = false,
+         isShared: Bool = false,
+         claudeAccess: Bool = false) {
         self.id = id
         self.name = name
         self.icon = icon
         self.accentHex = accent.argbHex
         self.isInbox = isInbox
         self.isShared = isShared
+        self.claudeAccess = claudeAccess
     }
 
-    init(id: String, name: String, icon: String, accentHex: UInt32, isInbox: Bool = false, isShared: Bool = false) {
+    init(id: String,
+         name: String,
+         icon: String,
+         accentHex: UInt32,
+         isInbox: Bool = false,
+         isShared: Bool = false,
+         claudeAccess: Bool = false) {
         self.id = id
         self.name = name
         self.icon = icon
         self.accentHex = accentHex
         self.isInbox = isInbox
         self.isShared = isShared
+        self.claudeAccess = claudeAccess
     }
 
     // MARK: - Codable: linux-compat shape
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, icon, accent, isInbox, isShared
+        case id, name, icon, accent, isInbox, isShared, claudeAccess
     }
 
     init(from decoder: Decoder) throws {
@@ -270,6 +349,7 @@ struct ProjectItem: Identifiable, Hashable, Codable {
         }
         self.isInbox = try c.decodeIfPresent(Bool.self, forKey: .isInbox) ?? false
         self.isShared = try c.decodeIfPresent(Bool.self, forKey: .isShared) ?? false
+        self.claudeAccess = try c.decodeIfPresent(Bool.self, forKey: .claudeAccess) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -287,6 +367,9 @@ struct ProjectItem: Identifiable, Hashable, Codable {
         // (correctly) won't know it's externally stored until they
         // implement the shared-file path themselves.
         if isShared { try c.encode(true, forKey: .isShared) }
+        // Same emit-when-true rule for claudeAccess — keeps existing
+        // bytes stable for projects that have never had the flag set.
+        if claudeAccess { try c.encode(true, forKey: .claudeAccess) }
     }
 }
 

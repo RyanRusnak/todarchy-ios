@@ -14,9 +14,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "28A0711201518A5724F9A676"
-               BuildableName = "todarchy.app"
-               BlueprintName = "todarchy"
+               BlueprintIdentifier = "52A079051A057EDECC28C2AB"
+               BuildableName = "todarchy-mcp"
+               BlueprintName = "todarchy-mcp"
                ReferencedContainer = "container:todarchy.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -30,23 +30,13 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "28A0711201518A5724F9A676"
-            BuildableName = "todarchy.app"
-            BlueprintName = "todarchy"
+            BlueprintIdentifier = "52A079051A057EDECC28C2AB"
+            BuildableName = "todarchy-mcp"
+            BlueprintName = "todarchy-mcp"
             ReferencedContainer = "container:todarchy.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "0A93A034AFB11D4E3EC131D6"
-               BuildableName = "todarchyTests.xctest"
-               BlueprintName = "todarchyTests"
-               ReferencedContainer = "container:todarchy.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -63,9 +53,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "28A0711201518A5724F9A676"
-            BuildableName = "todarchy.app"
-            BlueprintName = "todarchy"
+            BlueprintIdentifier = "52A079051A057EDECC28C2AB"
+            BuildableName = "todarchy-mcp"
+            BlueprintName = "todarchy-mcp"
             ReferencedContainer = "container:todarchy.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -80,9 +70,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "28A0711201518A5724F9A676"
-            BuildableName = "todarchy.app"
-            BlueprintName = "todarchy"
+            BlueprintIdentifier = "52A079051A057EDECC28C2AB"
+            BuildableName = "todarchy-mcp"
+            BlueprintName = "todarchy-mcp"
             ReferencedContainer = "container:todarchy.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

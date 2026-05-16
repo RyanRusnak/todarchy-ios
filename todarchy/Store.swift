@@ -429,6 +429,23 @@ final class TaskStore: ObservableObject {
         stamp(&tasks[idx])
     }
 
+    /// Append a comment to a task. Author defaults to the user-set
+    /// display name from `UserDefaults` (see `CommentAuthor.current`).
+    /// Trimmed and whitespace-only inputs are rejected.
+    @discardableResult
+    func addComment(taskId: String, text: String, author: String? = nil) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let idx = tasks.firstIndex(where: { $0.id == taskId }) else { return nil }
+        snapshot()
+        let comment = Comment(
+            author: author ?? CommentAuthor.current,
+            text: trimmed
+        )
+        tasks[idx].comments.append(comment)
+        return comment.id
+    }
+
     /// Reserved for future sync-ready fields. Currently a no-op since
     /// Automerge tracks causality implicitly via the doc's actor IDs.
     private func stamp(_ task: inout TaskItem) { _ = task }
@@ -446,6 +463,14 @@ final class TaskStore: ObservableObject {
     func renameProject(id: String, to name: String) {
         guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
         projects[idx].name = name
+    }
+
+    /// Grant / revoke MCP (Claude) access for a project. Synced via
+    /// the main doc so the toggle state shows up on every device.
+    func setClaudeAccess(id: String, enabled: Bool) {
+        guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
+        guard projects[idx].claudeAccess != enabled else { return }
+        projects[idx].claudeAccess = enabled
     }
 
     func deleteProject(id: String) {

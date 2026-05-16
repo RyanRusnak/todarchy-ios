@@ -5,6 +5,11 @@ struct TaskInspectorContent: View {
     @EnvironmentObject var store: TaskStore
     let task: TaskItem
 
+    @State private var commentDraft: String = ""
+    @FocusState private var commentFocused: Bool
+    @State private var bodyDraft: String = ""
+    @FocusState private var bodyFocused: Bool
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -25,22 +30,9 @@ struct TaskInspectorContent: View {
 
                 metaGrid
 
-                if !task.note.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("NOTE")
-                            .font(Typo.mono(10, weight: .semibold))
-                            .tracking(0.8)
-                            .foregroundStyle(Theme.fgMute)
-                        Text(task.note)
-                            .font(Typo.mono(12))
-                            .foregroundStyle(Theme.fgDim)
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Theme.bgSoft)
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                }
+                commentsSection
+
+                bodySection
 
                 VStack(spacing: 8) {
                     Button {
@@ -206,5 +198,164 @@ struct TaskInspectorContent: View {
             content()
             Spacer()
         }
+    }
+
+    // MARK: - Body
+
+    /// Body content — formerly "note". Markdown source, rendered when
+    /// not focused. Tap to edit. Mac/iPad both get this for free
+    /// since the inspector is in `Shared/`; this also gives Mac users
+    /// their first in-app way to edit notes (the previous inspector
+    /// was read-only).
+    private var bodySection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("BODY")
+                .font(Typo.mono(10, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(Theme.fgMute)
+
+            if bodyFocused || task.note.isEmpty {
+                TextEditor(text: $bodyDraft)
+                    .focused($bodyFocused)
+                    .font(Typo.mono(12))
+                    .foregroundStyle(Theme.fgDim)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 160)
+                    .padding(10)
+                    .background(Theme.bgSoft)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
+                    .onAppear { syncBodyDraft() }
+                    .onChange(of: task.id) { _, _ in syncBodyDraft() }
+                    .onChange(of: bodyDraft) { _, v in
+                        if v != task.note { store.setNote(task.id, note: v) }
+                    }
+            } else {
+                MarkdownText(raw: task.note)
+                    .font(Typo.mono(12))
+                    .foregroundStyle(Theme.fgDim)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.bgSoft)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        bodyDraft = task.note
+                        bodyFocused = true
+                    }
+            }
+        }
+    }
+
+    private func syncBodyDraft() {
+        // Only resync when the draft is out of step with the canonical
+        // value (e.g. switching tasks). Avoids clobbering keystrokes
+        // when external sync also touches the field.
+        if bodyDraft != task.note {
+            bodyDraft = task.note
+        }
+    }
+
+    // MARK: - Comments
+
+    private var commentsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("COMMENTS")
+                    .font(Typo.mono(10, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(Theme.fgMute)
+                if !task.comments.isEmpty {
+                    Text("(\(task.comments.count))")
+                        .font(Typo.mono(10))
+                        .foregroundStyle(Theme.fgFaint)
+                }
+            }
+
+            if task.comments.isEmpty {
+                Text("no comments yet")
+                    .font(Typo.mono(11))
+                    .italic()
+                    .foregroundStyle(Theme.fgFaint)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(task.comments) { c in
+                        commentRow(c)
+                    }
+                }
+            }
+
+            commentComposer
+        }
+    }
+
+    private func commentRow(_ c: Comment) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(c.author)
+                    .font(Typo.mono(11, weight: .semibold))
+                    .foregroundStyle(Theme.fg)
+                Text(TimeAgo.short(c.createdAt))
+                    .font(Typo.mono(10))
+                    .foregroundStyle(Theme.fgFaint)
+            }
+            Text(c.text)
+                .font(Typo.mono(12))
+                .foregroundStyle(Theme.fgDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Theme.bgSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
+    }
+
+    private var commentComposer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // axis: .vertical so the field grows for multi-line comments.
+            // Plain Return inserts a newline; ⌘↵ posts via the keyboard
+            // shortcut on the post button. Mirrors the macOS capture
+            // window's convention.
+            TextField("add a comment as \(CommentAuthor.current)…",
+                      text: $commentDraft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .focused($commentFocused)
+                .font(Typo.mono(12))
+                .foregroundStyle(Theme.fg)
+                .lineLimit(1...5)
+                .padding(8)
+                .background(Theme.bgSoft)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
+
+            HStack {
+                Text("⌘↵ post")
+                    .font(Typo.mono(10))
+                    .foregroundStyle(Theme.fgFaint)
+                Spacer()
+                Button(action: postComment) {
+                    Text("post")
+                        .font(Typo.mono(11, weight: .semibold))
+                        .foregroundStyle(canPostComment ? Theme.bg : Theme.fgMute)
+                        .padding(.horizontal, 12).padding(.vertical, 5)
+                        .background(canPostComment ? Theme.accent : Theme.bgSoft)
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canPostComment)
+                .keyboardShortcut(.return, modifiers: [.command])
+            }
+        }
+    }
+
+    private var canPostComment: Bool {
+        !commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func postComment() {
+        guard canPostComment else { return }
+        _ = store.addComment(taskId: task.id, text: commentDraft)
+        commentDraft = ""
+        commentFocused = false
     }
 }

@@ -121,12 +121,12 @@ final class AutomergeStore {
     /// Rebuild an in-memory snapshot from the doc. Tasks are sorted by pos
     /// ASC (with `created` as fallback) so the TaskStore's raw array matches
     /// the displayed top-to-bottom, oldest-first order.
-    func snapshot() throws -> TaskStorePersistence.Snapshot {
+    func snapshot() throws -> TodarchySnapshot {
         try locked {
             let tasks = try readTasks().sorted { $0.sortPos < $1.sortPos }
             let projects = try readProjects()
             let contexts = try readContexts()
-            return TaskStorePersistence.Snapshot(
+            return TodarchySnapshot(
                 tasks: tasks, projects: projects, contexts: contexts
             )
         }
@@ -193,6 +193,15 @@ final class AutomergeStore {
             obj = existingId
         } else {
             obj = try doc.putObject(obj: tasksMap, key: key, ty: .Map)
+            // Eagerly create the `comments` sub-Map at task creation.
+            // Without this, two devices both appending a comment for
+            // the first time would each `putObject` a fresh Map at
+            // the same key after the fork — Automerge would pick one
+            // and silently drop the other's comments. Pre-creating
+            // here means both devices fork from a state where the
+            // Map exists and their inserts land at different keys
+            // (commentId) inside the *same* Map, surviving merge.
+            _ = try doc.putObject(obj: obj, key: "comments", ty: .Map)
         }
         try writeTask(task, into: obj)
     }
@@ -305,7 +314,35 @@ final class AutomergeStore {
             task.parent = p
         }
         if let ms = try intValue(obj: obj, key: "pos") { task.pos = Date(millisecondsSince1970: ms) }
+        task.comments = try readComments(in: obj)
         return task
+    }
+
+    /// Read `comments` Map keyed by commentId. Returns sorted by
+    /// `createdAt` ASC so the UI gets the conversation in
+    /// chronological order without further sorting.
+    private func readComments(in taskObj: ObjId) throws -> [Comment] {
+        guard case let .Object(mapId, .Map) = try doc.get(obj: taskObj, key: "comments") else {
+            return []
+        }
+        let entries = try doc.mapEntries(obj: mapId)
+        var out: [Comment] = []
+        out.reserveCapacity(entries.count)
+        for (_, value) in entries {
+            guard case let .Object(commentObj, .Map) = value else { continue }
+            guard let id = try stringValue(obj: commentObj, key: "id"),
+                  let author = try stringValue(obj: commentObj, key: "author"),
+                  let text = try stringValue(obj: commentObj, key: "text"),
+                  let createdMs = try intValue(obj: commentObj, key: "createdAt") else {
+                Self.log.error("readComment: malformed entry, skipping")
+                continue
+            }
+            out.append(Comment(
+                id: id, author: author, text: text,
+                createdAt: Date(millisecondsSince1970: createdMs)
+            ))
+        }
+        return out.sorted { $0.createdAt < $1.createdAt }
     }
 
     private func writeTask(_ task: TaskItem, into obj: ObjId) throws {
@@ -336,6 +373,45 @@ final class AutomergeStore {
         } else {
             try? doc.delete(obj: obj, key: "pos")
         }
+        try writeComments(task.comments, into: obj)
+    }
+
+    /// Upsert each comment into the `comments` Map keyed by commentId.
+    /// New comments get a fresh sub-Map; existing ones are rewritten
+    /// (idempotent; same bytes for unchanged comments). Keyed by id
+    /// for the same reason tasks/projects are: concurrent inserts on
+    /// two devices land at different keys and both survive merge.
+    ///
+    /// Upsert-only: comments not present in the snapshot are *not*
+    /// deleted from the doc. Combined with eager Map creation in
+    /// `upsertTaskUnlocked`, this means once a task's `comments` Map
+    /// exists, both devices reference the same Map ObjId — concurrent
+    /// appends from two devices land at different commentId keys
+    /// inside it and both survive merge.
+    private func writeComments(_ comments: [Comment], into taskObj: ObjId) throws {
+        let mapId: ObjId
+        if case let .Object(existingId, .Map) = try doc.get(obj: taskObj, key: "comments") {
+            mapId = existingId
+        } else {
+            // Fallback for tasks that pre-date the eager creation —
+            // first write lazily creates the Map. Has the same
+            // concurrent-fork hazard as the original lazy approach,
+            // but only on the first comment ever added to a legacy
+            // task, which is a tight race.
+            mapId = try doc.putObject(obj: taskObj, key: "comments", ty: .Map)
+        }
+        for comment in comments {
+            let commentObj: ObjId
+            if case let .Object(existingId, .Map) = try doc.get(obj: mapId, key: comment.id) {
+                commentObj = existingId
+            } else {
+                commentObj = try doc.putObject(obj: mapId, key: comment.id, ty: .Map)
+            }
+            try doc.put(obj: commentObj, key: "id", value: .String(comment.id))
+            try doc.put(obj: commentObj, key: "author", value: .String(comment.author))
+            try doc.put(obj: commentObj, key: "text", value: .String(comment.text))
+            try doc.put(obj: commentObj, key: "createdAt", value: .Int(comment.createdAt.millisecondsSince1970))
+        }
     }
 
     // MARK: - Projects
@@ -364,8 +440,11 @@ final class AutomergeStore {
                 accent = 0x7AA2F7
             }
             let isShared = (try boolValue(obj: obj, key: "isShared")) ?? false
+            let claudeAccess = (try boolValue(obj: obj, key: "claudeAccess")) ?? false
             out.append(ProjectItem(id: id, name: name, icon: icon,
-                                    accentHex: accent, isShared: isShared))
+                                    accentHex: accent,
+                                    isShared: isShared,
+                                    claudeAccess: claudeAccess))
         }
         // Deterministic order for the UI — alphabetic by name, inbox-first
         // semantics are handled by TaskStore.allLists.
@@ -383,6 +462,11 @@ final class AutomergeStore {
             // Drop the key when false so docs that never had the field
             // stay byte-stable.
             try? doc.delete(obj: obj, key: "isShared")
+        }
+        if p.claudeAccess {
+            try doc.put(obj: obj, key: "claudeAccess", value: .Boolean(true))
+        } else {
+            try? doc.delete(obj: obj, key: "claudeAccess")
         }
     }
 

@@ -314,6 +314,68 @@ test_argon2_build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
 test_argon2_build_file.product_ref = test_argon2_product
 test_target.frameworks_build_phase.files << test_argon2_build_file
 
+# ---- MCP server target (macOS CLI binary, todarchy-mcp) ----
+# Exposes a JSON-RPC stdio interface backed by `tasks.automerge`,
+# scoped to projects whose `claudeAccess` flag is true. Sharing source
+# with the app target (rather than extracting a TodarchyCore package)
+# is intentional — same approach the test target uses; keeps the
+# build system unchanged.
+mcp_target = project.new_target(:command_line_tool, 'todarchy-mcp', :osx, '14.0', nil, :swift)
+mcp_target.product_name = 'todarchy-mcp'
+
+mcp_dir = File.join(ROOT, 'todarchy-mcp')
+mcp_group = project.new_group('todarchy-mcp', 'todarchy-mcp')
+Dir.entries(mcp_dir).sort.each do |entry|
+  next unless entry.end_with?('.swift')
+  fr = mcp_group.new_file(entry)
+  mcp_target.source_build_phase.add_file_reference(fr)
+end
+
+# Pull the data-layer subset of the app target's sources into the MCP
+# target. Skip everything UI-heavy (views, sheets, key routers) — the
+# MCP server only needs to read/write the Automerge doc, so giving it
+# the same minimum surface keeps build times small and the audit
+# surface narrow.
+MCP_SHARED_SOURCES = [
+  'AutomergeStore.swift',
+  'Models.swift',
+  'Theme.swift',
+  'Parser.swift',
+  File.join('Shared', 'Snapshot.swift'),
+]
+MCP_SHARED_SOURCES.each do |src_name|
+  src_path = File.join(APP_DIR, src_name)
+  next unless File.exist?(src_path)
+  file_ref = project.main_group.new_file(src_path)
+  mcp_target.source_build_phase.add_file_reference(file_ref)
+end
+
+mcp_common = common.dup
+mcp_common['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.todarchy.mcp'
+mcp_common['PRODUCT_NAME'] = 'todarchy-mcp'
+mcp_common['SUPPORTED_PLATFORMS'] = 'macosx'
+mcp_common['SDKROOT'] = 'macosx'
+mcp_common.delete('TARGETED_DEVICE_FAMILY')
+mcp_common.delete('IPHONEOS_DEPLOYMENT_TARGET')
+mcp_common.delete('SUPPORTS_MACCATALYST')
+mcp_common.delete('SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD')
+mcp_common.delete('CODE_SIGN_IDENTITY[sdk=iphoneos*]')
+mcp_common.delete('ASSETCATALOG_COMPILER_APPICON_NAME')
+mcp_common.delete('ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME')
+mcp_target.build_configurations.each do |config|
+  config.build_settings.merge!(mcp_common)
+end
+
+# Link Automerge into the MCP target too — same package reference,
+# new product dependency.
+mcp_automerge_product = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+mcp_automerge_product.package = automerge_ref
+mcp_automerge_product.product_name = 'Automerge'
+mcp_target.package_product_dependencies << mcp_automerge_product
+mcp_automerge_build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
+mcp_automerge_build_file.product_ref = mcp_automerge_product
+mcp_target.frameworks_build_phase.files << mcp_automerge_build_file
+
 # Save scheme that includes tests
 project.save
 
@@ -322,5 +384,14 @@ scheme.add_build_target(target)
 scheme.add_test_target(test_target)
 scheme.set_launch_target(target)
 scheme.save_as(PROJECT_PATH, 'todarchy', true)
+
+# Dedicated scheme for the MCP CLI. Building it directly is what the
+# install step does (`xcodebuild -scheme todarchy-mcp -configuration
+# Release build`), and having a scheme is what ensures the Automerge
+# package gets built as a dependency before the MCP target is linked.
+mcp_scheme = Xcodeproj::XCScheme.new
+mcp_scheme.add_build_target(mcp_target)
+mcp_scheme.set_launch_target(mcp_target)
+mcp_scheme.save_as(PROJECT_PATH, 'todarchy-mcp', true)
 
 puts "Project generated at #{PROJECT_PATH}"

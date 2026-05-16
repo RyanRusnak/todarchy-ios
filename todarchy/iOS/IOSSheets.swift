@@ -234,6 +234,12 @@ struct ListSwitcherSheet: View {
                     .foregroundStyle(list.accent.opacity(0.8))
                     .accessibilityLabel("Shared project")
             }
+            if list.claudeAccess {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(list.accent.opacity(0.8))
+                    .accessibilityLabel("Claude has access to this list")
+            }
 
             Spacer()
 
@@ -254,9 +260,19 @@ struct ListSwitcherSheet: View {
             onClose()
         }
         .contextMenu {
+            // Claude-access toggle is available on every project,
+            // including inbox + shared lists. Synced via main doc so
+            // toggling from any device propagates to the Mac (which
+            // runs the MCP server).
+            Button {
+                store.setClaudeAccess(id: list.id, enabled: !list.claudeAccess)
+            } label: {
+                Label(list.claudeAccess ? "Disable Claude access" : "Allow Claude access",
+                      systemImage: list.claudeAccess ? "sparkles.slash" : "sparkles")
+            }
             if list.isInbox {
-                // Inbox can't be shared; keep the menu empty so the
-                // long-press doesn't imply an action that won't work.
+                // Inbox can't be shared/deleted — Claude toggle above
+                // is the only menu item here.
             } else if list.isShared {
                 Button {
                     handleShareTap(list)
@@ -556,6 +572,9 @@ struct TaskDetailSheet: View {
 
     @State private var title = ""
     @State private var note = ""
+    @State private var commentDraft = ""
+    @FocusState private var commentFocused: Bool
+    @FocusState private var noteFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -565,6 +584,8 @@ struct TaskDetailSheet: View {
 
                     titleEditor(task: task)
                     noteEditor(task: task)
+
+                    commentsSection(task: task)
 
                     meta(task: task)
 
@@ -619,23 +640,126 @@ struct TaskDetailSheet: View {
             .onChange(of: title) { _, v in store.setTitle(task.id, title: v) }
     }
 
+    private func commentsSection(task: TaskItem) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("COMMENTS")
+                    .font(Typo.mono(10, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(Theme.fgMute)
+                if !task.comments.isEmpty {
+                    Text("(\(task.comments.count))")
+                        .font(Typo.mono(10))
+                        .foregroundStyle(Theme.fgFaint)
+                }
+            }
+
+            if task.comments.isEmpty {
+                Text("No comments yet.")
+                    .font(Typo.mono(11))
+                    .italic()
+                    .foregroundStyle(Theme.fgFaint)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(task.comments) { c in
+                        commentRow(c)
+                    }
+                }
+            }
+
+            commentComposer(task: task)
+        }
+    }
+
+    private func commentRow(_ c: Comment) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(c.author)
+                    .font(Typo.mono(11, weight: .semibold))
+                    .foregroundStyle(Theme.fg)
+                Text(TimeAgo.short(c.createdAt))
+                    .font(Typo.mono(10))
+                    .foregroundStyle(Theme.fgFaint)
+            }
+            Text(c.text)
+                .font(Typo.mono(13))
+                .foregroundStyle(Theme.fgDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Theme.bgSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1))
+    }
+
+    private func commentComposer(task: TaskItem) -> some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            TextField("add a comment as \(CommentAuthor.current)…",
+                      text: $commentDraft, axis: .vertical)
+                .focused($commentFocused)
+                .font(Typo.mono(13))
+                .foregroundStyle(Theme.fg)
+                .lineLimit(1...4)
+                .padding(10)
+                .background(Theme.bgSoft)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1))
+
+            Button {
+                _ = store.addComment(taskId: task.id, text: commentDraft)
+                commentDraft = ""
+                commentFocused = false
+            } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(canPostComment ? Theme.accent : Theme.fgMute)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canPostComment)
+            .accessibilityLabel("Post comment")
+        }
+    }
+
+    private var canPostComment: Bool {
+        !commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private func noteEditor(task: TaskItem) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("NOTE")
+            Text("BODY")
                 .font(Typo.mono(10, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(Theme.fgMute)
-            TextEditor(text: $note)
-                .font(Typo.mono(13))
-                .foregroundStyle(Theme.fgDim)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 80)
-                .padding(10)
-                .background(Theme.bgSoft)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1)
-                )
-                .onChange(of: note) { _, v in store.setNote(task.id, note: v) }
+            // Focus-based toggle: tap to edit raw markdown, blur to
+            // see the rendered preview. Keeps the source visible
+            // while typing (so the user can edit the markdown) and
+            // shows formatting otherwise (so it reads naturally).
+            if noteFocused || note.isEmpty {
+                TextEditor(text: $note)
+                    .focused($noteFocused)
+                    .font(Typo.mono(13))
+                    .foregroundStyle(Theme.fgDim)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 160)
+                    .padding(10)
+                    .background(Theme.bgSoft)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1)
+                    )
+                    .onChange(of: note) { _, v in store.setNote(task.id, note: v) }
+            } else {
+                MarkdownText(raw: note)
+                    .font(Typo.mono(13))
+                    .foregroundStyle(Theme.fgDim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Theme.bgSoft)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1)
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture { noteFocused = true }
+            }
         }
     }
 

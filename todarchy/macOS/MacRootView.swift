@@ -304,6 +304,12 @@ private struct MacSidebar: View {
                     .foregroundStyle(list.accent.opacity(0.8))
                     .help("Shared project")
             }
+            if list.claudeAccess {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(list.accent.opacity(0.8))
+                    .help("Claude has access to this list")
+            }
             Spacer()
             Text("\(store.countOpen(in: list.id))")
                 .font(Typo.mono(11))
@@ -328,9 +334,19 @@ private struct MacSidebar: View {
             store.activeContextFilter = nil
         }
         .contextMenu {
+            // Claude-access toggle is available on every project,
+            // including inbox + shared. The MCP server (only running
+            // on Mac today) reads `claudeAccess` from each project to
+            // decide what it can touch.
+            Button {
+                store.setClaudeAccess(id: list.id, enabled: !list.claudeAccess)
+            } label: {
+                Label(list.claudeAccess ? "Disable Claude access" : "Allow Claude access",
+                      systemImage: list.claudeAccess ? "sparkles.slash" : "sparkles")
+            }
             if list.isInbox {
-                // Inbox isn't deletable / shareable. Empty menu so
-                // a right-click doesn't suggest actions that won't work.
+                // Inbox isn't deletable / shareable, but Claude
+                // access is still toggleable above.
             } else if list.isShared {
                 Button(role: .destructive) {
                     pendingDelete = list
