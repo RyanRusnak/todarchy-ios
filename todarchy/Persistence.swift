@@ -653,11 +653,20 @@ final class TaskStorePersistence {
     /// DispatchSourceFileSystemObject doesn't fire for daemon-driven changes
     /// on iOS), as a manual "Refresh" affordance, and by the server poll
     /// timer every 10 seconds when in server mode.
+    ///
+    /// Fire-and-forget: dispatches the (potentially blocking) work to
+    /// the persistence queue via `queue.async`. **Must not** become
+    /// `queue.sync` — the synchronous server pulls inside this body
+    /// can each block ~5 s on bad networks, and any sync dispatch
+    /// from the main thread would freeze the UI for that duration ×
+    /// (1 + sharedStores.count). Callers that need to observe the
+    /// outcome should listen on `onExternalChange`.
     func refreshFromDisk() {
-        onQueue {
+        queue.async { [weak self] in
+            guard let self else { return }
             // Pull from the server first so disk + server state reconcile
             // in one merge pass.
-            pullMainFromServerSync()
+            self.pullMainFromServerSync()
             if FileManager.default.fileExists(atPath: fileURL.path),
                let bytes = readBytes(from: fileURL) {
                 _ = mergeOrRebuild(bytes)
@@ -683,13 +692,13 @@ final class TaskStorePersistence {
 
             // Always write back — this resolves conflict copies on disk.
             var mainBytesForServer: Data?
-            _ = retryOnPoison {
-                let b = automerge.save()
-                try writeBytes(b)
+            _ = self.retryOnPoison {
+                let b = self.automerge.save()
+                try self.writeBytes(b)
                 mainBytesForServer = b
             }
             if let b = mainBytesForServer {
-                pushMainToServer(b)
+                self.pushMainToServer(b)
             }
             DispatchQueue.main.async { [weak self] in
                 self?.onExternalChange?()
