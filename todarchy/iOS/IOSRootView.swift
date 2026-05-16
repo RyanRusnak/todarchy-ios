@@ -594,14 +594,16 @@ private struct IOSQuickAddBar: View {
                     guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                     commit()
                 }
-                // Return key submit. SwiftUI's `axis: .vertical` makes
-                // Return insert a newline by default and `.onSubmit`
-                // never fires. Intercept the keystroke: if a single
-                // character was just appended and it's a newline,
-                // treat it as a submit (strip the newline first so
-                // it doesn't end up in the task title). Pasted text
-                // with embedded newlines is left alone (we require
-                // count == oldValue.count + 1).
+                // Return key behavior: single-task add. SwiftUI's
+                // `axis: .vertical` makes Return insert a newline by
+                // default and `.onSubmit` never fires. Intercept the
+                // keystroke: if exactly one character was appended
+                // and it's a newline, treat it as a one-shot submit
+                // — commit the task AND dismiss the keyboard.
+                //
+                // The visible "save+" button (and its ⌘↵ shortcut)
+                // is the multi-add path: it commits without
+                // dismissing focus, for grocery-list-style batches.
                 .onChange(of: text) { oldValue, newValue in
                     guard newValue.count == oldValue.count + 1,
                           newValue.last == "\n" else { return }
@@ -614,9 +616,7 @@ private struct IOSQuickAddBar: View {
                     } else {
                         text = trimmed
                         commit()
-                        // Keep tfFocus = true — same save+ semantics
-                        // as the visible button. User dismisses
-                        // explicitly when done batch-entering.
+                        tfFocus = false
                     }
                 }
 
