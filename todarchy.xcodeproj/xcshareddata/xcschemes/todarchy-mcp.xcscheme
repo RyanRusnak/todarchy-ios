@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "52A079051A057EDECC28C2AB"
+               BlueprintIdentifier = "8F2F54B8FCE8DE802BAF68DB"
                BuildableName = "todarchy-mcp"
                BlueprintName = "todarchy-mcp"
                ReferencedContainer = "container:todarchy.xcodeproj">
@@ -30,7 +30,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "52A079051A057EDECC28C2AB"
+            BlueprintIdentifier = "8F2F54B8FCE8DE802BAF68DB"
             BuildableName = "todarchy-mcp"
             BlueprintName = "todarchy-mcp"
             ReferencedContainer = "container:todarchy.xcodeproj">
@@ -53,7 +53,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "52A079051A057EDECC28C2AB"
+            BlueprintIdentifier = "8F2F54B8FCE8DE802BAF68DB"
             BuildableName = "todarchy-mcp"
             BlueprintName = "todarchy-mcp"
             ReferencedContainer = "container:todarchy.xcodeproj">
@@ -70,7 +70,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "52A079051A057EDECC28C2AB"
+            BlueprintIdentifier = "8F2F54B8FCE8DE802BAF68DB"
             BuildableName = "todarchy-mcp"
             BlueprintName = "todarchy-mcp"
             ReferencedContainer = "container:todarchy.xcodeproj">

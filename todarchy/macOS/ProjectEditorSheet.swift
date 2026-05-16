@@ -116,6 +116,15 @@ struct ProjectEditorSheet: View {
                     .focused($editFieldFocus)
                     .onSubmit { commitEdit(project.id) }
                     .onExitCommand { cancelEdit(project.id) }
+                    // Commit on blur (e.g. user clicks somewhere
+                    // else without pressing Return). Without this,
+                    // typed names silently evaporate — which is the
+                    // bug the existing model-layer tests can't
+                    // catch.
+                    .onChange(of: editFieldFocus) { _, focused in
+                        guard !focused, editingId == project.id else { return }
+                        commitEdit(project.id)
+                    }
             } else {
                 Text(project.name)
                     .font(Typo.mono(13, weight: .medium))
@@ -146,6 +155,11 @@ struct ProjectEditorSheet: View {
             Button {
                 editingId = project.id
                 editBuffer = project.name
+                // Auto-focus the field so the user can type
+                // immediately — clicking pencil without focusing
+                // means Return won't fire `.onSubmit`, which is
+                // probably how typed renames were getting lost.
+                DispatchQueue.main.async { editFieldFocus = true }
             } label: {
                 Image(systemName: "pencil")
                     .foregroundStyle(Theme.fgMute)

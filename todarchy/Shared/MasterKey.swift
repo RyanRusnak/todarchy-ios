@@ -35,13 +35,24 @@ final class MasterKey: ObservableObject {
 
     private let cache: MasterKeyCache
 
+    /// In-memory mirror of the keychain blob. Read once at init via
+    /// `cache.load()`, then updated alongside writes (`derive`,
+    /// `setDerivedKey`, `forget`). Crucially this means
+    /// `adoptSalt(_:)` — which fires on every main-doc merge — no
+    /// longer hits the keychain. Without this mirror, the macOS
+    /// "Always Allow" prompt would pile up multiple times at startup
+    /// as sync ticks repeated.
+    private var cachedBlob: Data?
+
     init(cache: MasterKeyCache) {
         self.cache = cache
-        // Optimistic load: if there's a cached blob, expose it as
-        // `currentKey` immediately. The next `adoptSalt(_:)` call will
-        // invalidate it if the salt no longer matches.
-        if let blob = cache.load(), let unpacked = Self.unpack(blob) {
-            self.currentKey = unpacked.key
+        // One keychain read at init. Everything downstream uses the
+        // in-memory mirror.
+        if let blob = cache.load() {
+            self.cachedBlob = blob
+            if let unpacked = Self.unpack(blob) {
+                self.currentKey = unpacked.key
+            }
         }
     }
 
@@ -66,15 +77,21 @@ final class MasterKey: ObservableObject {
         let rawKey = try await Task.detached(priority: .userInitiated) {
             try Argon2.deriveKey(passphrase: passphrase, salt: salt, params: params)
         }.value
-        try cache.save(Self.pack(key: rawKey, salt: salt))
+        let blob = Self.pack(key: rawKey, salt: salt)
+        try cache.save(blob)
+        self.cachedBlob = blob
         self.currentKey = SymmetricKey(data: rawKey)
     }
 
     /// Reconcile a cached key with the salt the main doc currently
     /// advertises. Match → keep `currentKey`. Mismatch (or no cache)
     /// → clear so the UI knows to prompt.
+    ///
+    /// Reads from the in-memory mirror — no keychain hit, which is
+    /// what keeps the "Always Allow" prompt from firing once per
+    /// sync tick.
     func adoptSalt(_ salt: Data) {
-        guard let blob = cache.load(), let unpacked = Self.unpack(blob) else {
+        guard let blob = cachedBlob, let unpacked = Self.unpack(blob) else {
             currentKey = nil
             return
         }
@@ -82,6 +99,7 @@ final class MasterKey: ObservableObject {
             currentKey = unpacked.key
         } else {
             try? cache.clear()
+            cachedBlob = nil
             currentKey = nil
         }
     }
@@ -91,6 +109,7 @@ final class MasterKey: ObservableObject {
     /// touch the salt or `shareKeys` in the main doc.
     func forget() {
         try? cache.clear()
+        cachedBlob = nil
         currentKey = nil
     }
 
@@ -100,7 +119,9 @@ final class MasterKey: ObservableObject {
     /// re-encrypted the cipher, so we don't want to pay another
     /// ~300 ms derivation just to write the cache.
     func setDerivedKey(_ rawKey: Data, salt: Data) throws {
-        try cache.save(Self.pack(key: rawKey, salt: salt))
+        let blob = Self.pack(key: rawKey, salt: salt)
+        try cache.save(blob)
+        self.cachedBlob = blob
         self.currentKey = SymmetricKey(data: rawKey)
     }
 

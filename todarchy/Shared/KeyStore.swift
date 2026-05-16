@@ -51,6 +51,17 @@ final class KeychainKeyStore: KeyStore {
     /// entitlement — off by default so ad-hoc-signed builds work.
     private let synchronizable: Bool
 
+    /// In-memory mirror of all keychain items under our service,
+    /// populated lazily on the first call via a single batched query
+    /// (`kSecMatchLimitAll`). Without this, every `load(for:)` is its
+    /// own keychain hit — on macOS that's one "Always Allow" prompt
+    /// per shared project per sync tick. Save / delete keep the
+    /// mirror in step with the actual keychain so we never serve
+    /// stale reads.
+    private var cache: [String: SymmetricKey] = [:]
+    private var warmed: Bool = false
+    private let cacheLock = NSLock()
+
     init(service: String = "com.todarchy.app.shared-keys",
          synchronizable: Bool = false) {
         self.service = service
@@ -64,7 +75,10 @@ final class KeychainKeyStore: KeyStore {
         // Try an update first — if the item exists, update in place.
         let attrsToUpdate: [String: Any] = [kSecValueData as String: raw]
         let updateStatus = SecItemUpdate(query as CFDictionary, attrsToUpdate as CFDictionary)
-        if updateStatus == errSecSuccess { return }
+        if updateStatus == errSecSuccess {
+            mirrorWrite(projectId: projectId, key: key)
+            return
+        }
         if updateStatus == errSecItemNotFound {
             // Fresh add.
             var add = query
@@ -74,33 +88,54 @@ final class KeychainKeyStore: KeyStore {
             guard addStatus == errSecSuccess else {
                 throw KeychainError.unexpectedStatus(addStatus)
             }
+            mirrorWrite(projectId: projectId, key: key)
             return
         }
         throw KeychainError.unexpectedStatus(updateStatus)
     }
 
     func load(for projectId: String) -> SymmetricKey? {
-        var query = baseQuery(for: projectId)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess else { return nil }
-        guard let data = item as? Data, data.count == 32 else { return nil }
-        return SymmetricKey(data: data)
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if !warmed { warmCacheUnlocked() }
+        return cache[projectId]
     }
 
     func delete(for projectId: String) {
         let query = baseQuery(for: projectId)
         _ = SecItemDelete(query as CFDictionary)
+        cacheLock.lock()
+        cache.removeValue(forKey: projectId)
+        cacheLock.unlock()
     }
 
     func allProjectIds() -> [String] {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if !warmed { warmCacheUnlocked() }
+        return Array(cache.keys)
+    }
+
+    private func mirrorWrite(projectId: String, key: SymmetricKey) {
+        cacheLock.lock()
+        // If we haven't warmed yet, mark warmed — we just placed the
+        // canonical view for this id, and other ids will be filled in
+        // on the next load() call's warmup.
+        cache[projectId] = key
+        cacheLock.unlock()
+    }
+
+    /// One batched keychain query that returns every item under our
+    /// service in a single shot. The single ACL check is what cuts
+    /// macOS "Always Allow" prompts from N (one per project) to 1.
+    /// Caller must hold `cacheLock`.
+    private func warmCacheUnlocked() {
+        defer { warmed = true }
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnAttributes as String: true,
+            kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitAll,
         ]
         if synchronizable {
@@ -109,9 +144,14 @@ final class KeychainKeyStore: KeyStore {
         var items: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &items)
         guard status == errSecSuccess, let array = items as? [[String: Any]] else {
-            return []
+            return
         }
-        return array.compactMap { $0[kSecAttrAccount as String] as? String }
+        for entry in array {
+            guard let account = entry[kSecAttrAccount as String] as? String,
+                  let data = entry[kSecValueData as String] as? Data,
+                  data.count == 32 else { continue }
+            cache[account] = SymmetricKey(data: data)
+        }
     }
 
     // MARK: -
