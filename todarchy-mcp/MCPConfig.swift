@@ -35,10 +35,20 @@ struct MCPConfig {
         )
     }
 
-    /// Mirrors `TaskStorePersistence.defaultFileURL()` — keep these
-    /// in sync if the app ever moves its on-disk location.
+    /// The Mac app ships sandboxed (see `todarchy/macOS/todarchy.entitlements`),
+    /// so its `Application Support/todarchy/tasks.automerge` lives inside
+    /// the app's container, not the user's plain Application Support dir.
+    /// Prefer the container path when it exists; fall back to the
+    /// non-sandboxed location for older / dev builds.
     private static func defaultFilePath() -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let containerPath = home
+            .appendingPathComponent("Library/Containers/com.todarchy.app/Data/Library/Application Support/todarchy/tasks.automerge")
+            .path
+        if fm.fileExists(atPath: containerPath) {
+            return containerPath
+        }
         return home
             .appendingPathComponent("Library/Application Support/todarchy/tasks.automerge")
             .path

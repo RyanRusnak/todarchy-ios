@@ -5,9 +5,9 @@ struct TaskInspectorContent: View {
     @EnvironmentObject var store: TaskStore
     let task: TaskItem
 
-    @State private var commentDraft: String = ""
+    @State private var commentState = CommentComposerState()
     @FocusState private var commentFocused: Bool
-    @State private var bodyDraft: String = ""
+    @State private var bodyState = BodyEditorState()
     @FocusState private var bodyFocused: Bool
 
     var body: some View {
@@ -30,9 +30,11 @@ struct TaskInspectorContent: View {
 
                 metaGrid
 
-                commentsSection
-
+                // Body is the canonical long-form content — show it
+                // above comments so it's visible without scrolling.
                 bodySection
+
+                commentsSection
 
                 VStack(spacing: 8) {
                     Button {
@@ -209,13 +211,22 @@ struct TaskInspectorContent: View {
     /// was read-only).
     private var bodySection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("BODY")
-                .font(Typo.mono(10, weight: .semibold))
-                .tracking(0.8)
-                .foregroundStyle(Theme.fgMute)
+            HStack(spacing: 8) {
+                Text("BODY")
+                    .font(Typo.mono(10, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(Theme.fgMute)
+                Spacer()
+                if bodyState.isEditing {
+                    Text("⎋ done")
+                        .font(Typo.mono(10))
+                        .foregroundStyle(Theme.fgFaint)
+                }
+            }
 
-            if bodyFocused || task.note.isEmpty {
-                TextEditor(text: $bodyDraft)
+            switch bodyState.display(canonical: task.note) {
+            case .editing:
+                TextEditor(text: $bodyState.draft)
                     .focused($bodyFocused)
                     .font(Typo.mono(12))
                     .foregroundStyle(Theme.fgDim)
@@ -224,35 +235,45 @@ struct TaskInspectorContent: View {
                     .padding(10)
                     .background(Theme.bgSoft)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
-                    .onAppear { syncBodyDraft() }
-                    .onChange(of: task.id) { _, _ in syncBodyDraft() }
-                    .onChange(of: bodyDraft) { _, v in
+                    .onAppear { bodyFocused = true }
+                    .onChange(of: bodyState.draft) { _, v in
                         if v != task.note { store.setNote(task.id, note: v) }
                     }
-            } else {
+                    .onChange(of: bodyFocused) { _, focused in
+                        if !focused { bodyState.escape() }
+                    }
+                    .modifier(EscapeToDismiss { bodyState.escape() })
+            case .emptyPlaceholder:
+                Button {
+                    bodyState.beginEditing(seed: "")
+                } label: {
+                    Text("tap to add body…")
+                        .font(Typo.mono(12))
+                        .italic()
+                        .foregroundStyle(Theme.fgFaint)
+                        .frame(maxWidth: .infinity, minHeight: 60, alignment: .topLeading)
+                        .padding(10)
+                        .background(Theme.bgSoft)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            case .preview:
                 MarkdownText(raw: task.note)
-                    .font(Typo.mono(12))
-                    .foregroundStyle(Theme.fgDim)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.bgSoft)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        bodyDraft = task.note
-                        bodyFocused = true
-                    }
+                    .onTapGesture { bodyState.beginEditing(seed: task.note) }
             }
         }
-    }
-
-    private func syncBodyDraft() {
-        // Only resync when the draft is out of step with the canonical
-        // value (e.g. switching tasks). Avoids clobbering keystrokes
-        // when external sync also touches the field.
-        if bodyDraft != task.note {
-            bodyDraft = task.note
+        .onAppear { bodyState.syncFromCanonical(task.note) }
+        .onChange(of: task.id) { _, _ in
+            bodyState.escape()
+            bodyState.syncFromCanonical(task.note)
         }
     }
 
@@ -313,49 +334,86 @@ struct TaskInspectorContent: View {
 
     private var commentComposer: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // axis: .vertical so the field grows for multi-line comments.
-            // Plain Return inserts a newline; ⌘↵ posts via the keyboard
-            // shortcut on the post button. Mirrors the macOS capture
-            // window's convention.
-            TextField("add a comment as \(CommentAuthor.current)…",
-                      text: $commentDraft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .focused($commentFocused)
-                .font(Typo.mono(12))
-                .foregroundStyle(Theme.fg)
-                .lineLimit(1...5)
-                .padding(8)
-                .background(Theme.bgSoft)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
+            switch commentState.display {
+            case .editing:
+                // axis: .vertical so the field grows for multi-line comments.
+                // Plain Return inserts a newline; ⌘↵ posts via the keyboard
+                // shortcut on the post button. Mirrors the macOS capture
+                // window's convention.
+                TextField("add a comment as \(CommentAuthor.current)…",
+                          text: $commentState.draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .focused($commentFocused)
+                    .font(Typo.mono(12))
+                    .foregroundStyle(Theme.fg)
+                    .lineLimit(1...5)
+                    .padding(8)
+                    .background(Theme.bgSoft)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
+                    .onAppear { commentFocused = true }
+                    .onChange(of: commentFocused) { _, focused in
+                        if !focused && commentState.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            commentState.escape()
+                        }
+                    }
+                    .modifier(EscapeToDismiss { commentState.escape() })
+            case .placeholder:
+                Button {
+                    commentState.beginEditing()
+                } label: {
+                    Text("add a comment as \(CommentAuthor.current)…")
+                        .font(Typo.mono(12))
+                        .italic()
+                        .foregroundStyle(Theme.fgFaint)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Theme.bgSoft)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
 
             HStack {
-                Text("⌘↵ post")
+                Text(commentState.isFocused ? "⌘↵ post  ·  ⎋ done" : "⌘↵ post")
                     .font(Typo.mono(10))
                     .foregroundStyle(Theme.fgFaint)
                 Spacer()
                 Button(action: postComment) {
                     Text("post")
                         .font(Typo.mono(11, weight: .semibold))
-                        .foregroundStyle(canPostComment ? Theme.bg : Theme.fgMute)
+                        .foregroundStyle(commentState.canPost ? Theme.bg : Theme.fgMute)
                         .padding(.horizontal, 12).padding(.vertical, 5)
-                        .background(canPostComment ? Theme.accent : Theme.bgSoft)
+                        .background(commentState.canPost ? Theme.accent : Theme.bgSoft)
                         .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
                 .buttonStyle(.plain)
-                .disabled(!canPostComment)
+                .disabled(!commentState.canPost)
                 .keyboardShortcut(.return, modifiers: [.command])
             }
         }
-    }
-
-    private var canPostComment: Bool {
-        !commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        .onChange(of: task.id) { _, _ in commentState.escape() }
     }
 
     private func postComment() {
-        guard canPostComment else { return }
-        _ = store.addComment(taskId: task.id, text: commentDraft)
-        commentDraft = ""
-        commentFocused = false
+        guard commentState.canPost else { return }
+        _ = store.addComment(taskId: task.id, text: commentState.draft)
+        commentState.didPost()
+    }
+}
+
+/// Wraps `.onExitCommand` so the shared inspector compiles on iOS,
+/// where the modifier is unavailable. On iOS this is a no-op — the
+/// system keyboard's dismiss gesture covers the same UX gap.
+private struct EscapeToDismiss: ViewModifier {
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.onExitCommand(perform: action)
+        #else
+        content
+        #endif
     }
 }

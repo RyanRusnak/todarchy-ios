@@ -214,6 +214,31 @@ build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
 build_file.product_ref = automerge_product
 target.frameworks_build_phase.files << build_file
 
+# ---- MarkdownUI SPM dependency ----
+# Renders the task body's markdown as actual headings, lists, code
+# blocks, etc. Native `AttributedString(markdown:)` only handles inline
+# styling (bold/italic/links) — fine for short notes but not for the
+# rich plans Claude writes via `set_task_body`.
+markdownui_ref = project.root_object.package_references.find do |r|
+  r.respond_to?(:repositoryURL) && r.repositoryURL == 'https://github.com/gonzalezreal/swift-markdown-ui'
+end
+
+unless markdownui_ref
+  markdownui_ref = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
+  markdownui_ref.repositoryURL = 'https://github.com/gonzalezreal/swift-markdown-ui'
+  markdownui_ref.requirement = { 'kind' => 'upToNextMajorVersion', 'minimumVersion' => '2.0.0' }
+  project.root_object.package_references << markdownui_ref
+end
+
+markdownui_product = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+markdownui_product.package = markdownui_ref
+markdownui_product.product_name = 'MarkdownUI'
+target.package_product_dependencies << markdownui_product
+
+markdownui_build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
+markdownui_build_file.product_ref = markdownui_product
+target.frameworks_build_phase.files << markdownui_build_file
+
 # ---- Local Argon2 SPM package ----
 # Vendors libargon2 (reference impl) for passphrase-derived master-key
 # derivation. Lives in `Packages/Argon2/`. Linked into both the app
@@ -303,6 +328,17 @@ test_target.package_product_dependencies << test_automerge_product
 test_build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
 test_build_file.product_ref = test_automerge_product
 test_target.frameworks_build_phase.files << test_build_file
+
+# Test target compiles the shared `MarkdownText.swift` from the app
+# target, which imports `MarkdownUI` — so the test bundle has to link
+# it too. Same one-off wiring as Automerge above.
+test_markdownui_product = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+test_markdownui_product.package = markdownui_ref
+test_markdownui_product.product_name = 'MarkdownUI'
+test_target.package_product_dependencies << test_markdownui_product
+test_markdownui_build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
+test_markdownui_build_file.product_ref = test_markdownui_product
+test_target.frameworks_build_phase.files << test_markdownui_build_file
 
 # Test target also links the local Argon2 package — MasterKey tests
 # call `Argon2.deriveKey` directly to verify derivation behavior.

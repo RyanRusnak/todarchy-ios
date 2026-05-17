@@ -24,7 +24,13 @@ struct MacRootView: View {
                 MacMainView(onOpenCapture: { showCapture = true })
                     .inspector(isPresented: $showInspector) {
                         MacInspector()
-                            .inspectorColumnWidth(min: 280, ideal: 320, max: 400)
+                            // Inspector opens around half the typical
+                            // 1280-pt window. The user can drag it
+                            // narrower (320 minimum, to keep the
+                            // meta grid legible) or wider (up to
+                            // 1000 for big monitors and long
+                            // markdown plans).
+                            .inspectorColumnWidth(min: 320, ideal: 620, max: 1000)
                     }
             }
             .navigationSplitViewStyle(.balanced)

@@ -749,8 +749,6 @@ struct TaskDetailSheet: View {
                     .onChange(of: note) { _, v in store.setNote(task.id, note: v) }
             } else {
                 MarkdownText(raw: note)
-                    .font(Typo.mono(13))
-                    .foregroundStyle(Theme.fgDim)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
                     .background(Theme.bgSoft)

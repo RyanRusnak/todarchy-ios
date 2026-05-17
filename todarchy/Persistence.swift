@@ -664,6 +664,19 @@ final class TaskStorePersistence {
     func refreshFromDisk() {
         queue.async { [weak self] in
             guard let self else { return }
+            // If a local mutation is queued for the debounced save,
+            // promote this refresh into a full flush. The bare
+            // pull/merge/notify path below would otherwise reload
+            // the UI from a doc that doesn't yet contain the
+            // pending mutation — so a freshly-completed task
+            // visibly comes back until flushNow runs (up to 5 s if
+            // the server pull hits its timeout). flushNow already
+            // does its own server pull, so nothing is lost by
+            // routing through it.
+            if self.pendingSnapshot != nil {
+                self.flushNow()
+                return
+            }
             // Pull from the server first so disk + server state reconcile
             // in one merge pass.
             self.pullMainFromServerSync()

@@ -306,6 +306,63 @@ final class PersistenceTests: XCTestCase {
                        "Expected remote-edit after setFileURL, got titles: \(merged.tasks.map(\.title))")
     }
 
+    // MARK: - refreshFromDisk vs. pending save race
+
+    /// Regression: tasks were "coming back" after being marked
+    /// completed on macOS. The scenario is a 10 s server-poll (or
+    /// scenePhase `.active`) firing `refreshFromDisk` during the
+    /// 0.25 s debounce window of a local mutation — refreshFromDisk
+    /// would notify observers from a doc snapshot that didn't yet
+    /// include the pending mutation, so the UI reloaded the task
+    /// as undone until `flushNow` eventually ran.
+    ///
+    /// The fix: when `refreshFromDisk` runs and `pendingSnapshot`
+    /// is non-nil, promote it to a full flush. flushNow does its
+    /// own server pull, so we lose nothing by routing through it.
+    func testRefreshFromDisk_withPendingSave_appliesMutationBeforeNotifying() throws {
+        // Seed the disk with an undone task.
+        let original = TaskItem(list: "inbox", title: "complete me",
+                                 created: Date(timeIntervalSince1970: 1_700_000_000),
+                                 pos: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertNil(original.doneAt)
+        persistence.saveNow(.init(tasks: [original], projects: []))
+
+        // Schedule (but do not flush) a save that marks the task
+        // done. This sets `pendingSnapshot` and arms the debounced
+        // flushNow at T+0.25 s — exactly the window where the race
+        // used to bite.
+        var done = original
+        done.doneAt = Date(timeIntervalSince1970: 1_700_000_100)
+        persistence.scheduleSave(.init(tasks: [done], projects: []))
+
+        // Simulate the 10 s poll firing during that window.
+        persistence.refreshFromDisk()
+
+        // load() does `queue.sync` so it waits for the async
+        // refreshFromDisk to finish — without waiting for the
+        // debounced asyncAfter, which is still in the future.
+        let loaded = persistence.load()!
+        let reloaded = try XCTUnwrap(loaded.tasks.first { $0.id == original.id })
+        XCTAssertNotNil(reloaded.doneAt,
+            "refreshFromDisk during a pending save must not strand the local mutation — the UI would otherwise reload from a stale doc and the task would visibly come back until flushNow fires.")
+    }
+
+    /// Companion: when there is no pending save, refreshFromDisk
+    /// still works as a plain pull/merge/notify path. (Without a
+    /// server client the pull is a no-op, but we exercise the code
+    /// path to ensure the early-return for `pendingSnapshot` doesn't
+    /// short-circuit the bare refresh case.)
+    func testRefreshFromDisk_withoutPendingSave_isNoopOnUnchangedDoc() throws {
+        let t = TaskItem(list: "inbox", title: "stable",
+                          pos: Date(timeIntervalSince1970: 1_700_000_000))
+        persistence.saveNow(.init(tasks: [t], projects: []))
+
+        persistence.refreshFromDisk()
+        let loaded = persistence.load()!
+        XCTAssertEqual(loaded.tasks.count, 1)
+        XCTAssertEqual(loaded.tasks.first?.title, "stable")
+    }
+
     // MARK: - Schema
 
     func testMissingPosFilledFromCreated() {

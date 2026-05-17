@@ -17,6 +17,7 @@ enum MCPTools {
         addTaskTool,
         completeTaskTool,
         addCommentTool,
+        setTaskBodyTool,
     ]
 
     static func call(params: [String: Any], config: MCPConfig) throws -> Any {
@@ -41,6 +42,9 @@ enum MCPTools {
         case "add_comment":
             try requireWritable(config)
             text = try handleAddComment(args: args, doc: doc, config: config)
+        case "set_task_body":
+            try requireWritable(config)
+            text = try handleSetTaskBody(args: args, doc: doc)
         default:
             throw MCPError(code: -32601, message: "Unknown tool: \(name)")
         }
@@ -149,6 +153,30 @@ enum MCPTools {
                 "text": ["type": "string", "description": "Comment body (plain text)."]
             ],
             "required": ["task_id", "text"]
+        ]
+    )
+
+    private static let setTaskBodyTool = MCPTool(
+        name: "set_task_body",
+        description: """
+        Replace the markdown body of a task. The body is the canonical \
+        long-form content on a task — used for plans, specs, deliverables, \
+        whatever you're producing. Comments on the task stay intact; only \
+        the body field is overwritten. Task must be in a Claude-accessible \
+        project. Pass the full new body in one call — append-style edits \
+        should be done by calling `get_task` first, modifying locally, then \
+        writing back here.
+        """,
+        inputSchema: [
+            "type": "object",
+            "properties": [
+                "id": ["type": "string", "description": "Task id."],
+                "body": [
+                    "type": "string",
+                    "description": "Full markdown body. Replaces the existing body entirely."
+                ]
+            ],
+            "required": ["id", "body"]
         ]
     )
 
@@ -288,6 +316,28 @@ enum MCPTools {
         try doc.store.upsertTask(task)
         try doc.save()
         return "Completed task \(id)."
+    }
+
+    private static func handleSetTaskBody(args: [String: Any], doc: TodarchyDoc) throws -> String {
+        guard let id = args["id"] as? String else {
+            throw MCPError(code: -32602, message: "id is required")
+        }
+        guard let body = args["body"] as? String else {
+            throw MCPError(code: -32602, message: "body is required")
+        }
+        let snap = try doc.store.snapshot()
+        let accessible: Set<String> = Set(snap.projects.filter { $0.claudeAccess }.map { $0.id })
+
+        guard var task = snap.tasks.first(where: { $0.id == id }) else {
+            throw MCPError(code: -32000, message: "Task not found: \(id)")
+        }
+        guard accessible.contains(task.list) else {
+            throw MCPError(code: -32000, message: "Task is in a project without Claude access.")
+        }
+        task.note = body
+        try doc.store.upsertTask(task)
+        try doc.save()
+        return "Updated body of task \(id) (\(body.count) chars)."
     }
 
     private static func handleAddComment(args: [String: Any],
