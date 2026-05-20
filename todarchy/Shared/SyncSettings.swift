@@ -208,6 +208,10 @@ final class SyncSettings: ObservableObject {
             installSharedManager(folder: cacheFolder, on: TaskStorePersistence.shared)
             // Stay on the Application Support cache file. Server pull
             // happens on the first refresh cycle / save, not here.
+            // setFileURL is not called in this path (the URL hasn't changed),
+            // so we must start the poll timer explicitly — setFileURL is the
+            // only other place that starts it.
+            TaskStorePersistence.shared.startServerPollTimer()
 
         case .localOnly:
             sharedProjectManager = nil

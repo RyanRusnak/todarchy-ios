@@ -298,6 +298,16 @@ app_sources_for_tests.each do |src|
   test_target.source_build_phase.add_file_reference(file_ref)
 end
 
+# Pull selected MCP-target sources into the test bundle so we can
+# exercise their integration with the shared data layer. Currently
+# just `TodarchyDoc.swift` so we can regression-test its
+# merge-with-disk behavior on save.
+mcp_sources_for_tests = ['TodarchyDoc.swift'].map { |b| File.join(ROOT, 'todarchy-mcp', b) }
+mcp_sources_for_tests.each do |src|
+  file_ref = project.main_group.new_file(src)
+  test_target.source_build_phase.add_file_reference(file_ref)
+end
+
 test_common = common.dup
 test_common['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.todarchy.app.tests'
 test_common['PRODUCT_NAME'] = 'todarchyTests'

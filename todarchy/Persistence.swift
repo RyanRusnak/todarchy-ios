@@ -511,6 +511,14 @@ final class TaskStorePersistence {
             _ = mergeOrRebuild(bytes)
             DispatchQueue.main.async {
                 SyncSettings.shared.markServerHealth(.ok)
+                // markMerged was historically only called from the
+                // manual Sync Now button — so the diagnostics
+                // "last merged" line stuck at whenever the user
+                // last tapped Refresh, even though the 10 s poll
+                // had been pulling cleanly the whole time. Recording
+                // it here gives an honest "auto-sync is alive"
+                // signal in the diagnostics view.
+                SyncSettings.shared.markMerged()
             }
         } else if let error = result.error {
             DispatchQueue.main.async {
@@ -600,7 +608,7 @@ final class TaskStorePersistence {
     /// Start the foreground 30s poll that pulls from the server at a
     /// steady cadence while the app is active. Idempotent; safe to call
     /// whenever the server client is installed.
-    private func startServerPollTimer() {
+    func startServerPollTimer() {
         stopServerPollTimer()
         guard serverClient != nil else { return }
         DispatchQueue.main.async { [weak self] in
@@ -991,17 +999,41 @@ final class TaskStorePersistence {
         watcher = nil
     }
 
-    private func handleExternalEvent() {
-        // Already on `queue` because the DispatchSource was created with it.
-        if let bytes = readBytes(from: fileURL) {
-            _ = mergeOrRebuild(bytes)
-            ingestConflictCopies()
-            DispatchQueue.main.async { [weak self] in
-                self?.onExternalChange?()
+    /// Internal (not private) so the test bundle can drive the
+    /// pendingSnapshot-vs-external-write race deterministically
+    /// without depending on `DispatchSourceFileSystemObject` firing
+    /// in test time. The body is wrapped in `onQueue` so callers on
+    /// any thread are safe; the DispatchSource path is already on
+    /// `queue` and `onQueue` short-circuits to inline execution in
+    /// that case.
+    func handleExternalEvent() {
+        onQueue {
+            // Same race-guard as `refreshFromDisk`: if a local
+            // mutation is queued for the debounced save, promote
+            // this external-change ingest into a full flush.
+            // Otherwise the bare merge+notify below would reload
+            // the UI from a doc that doesn't yet contain the
+            // pending mutation — visible as a "task came back"
+            // flicker whenever the MCP server (or any other
+            // writer) touches the file during the 0.25 s save
+            // window. `flushNow` absorbs disk state itself (step 1)
+            // so nothing is lost by routing through it.
+            if pendingSnapshot != nil {
+                flushNow()
+                startWatching()
+                return
             }
+            if let bytes = readBytes(from: fileURL) {
+                _ = mergeOrRebuild(bytes)
+                ingestConflictCopies()
+                DispatchQueue.main.async { [weak self] in
+                    SyncSettings.shared.markMerged()
+                    self?.onExternalChange?()
+                }
+            }
+            // Re-arm the watcher on the same queue we're on.
+            startWatching()
         }
-        // Re-arm the watcher on the same queue we're on.
-        startWatching()
     }
 
     // MARK: - Re-point the sync folder

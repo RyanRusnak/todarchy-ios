@@ -347,6 +347,43 @@ final class PersistenceTests: XCTestCase {
             "refreshFromDisk during a pending save must not strand the local mutation — the UI would otherwise reload from a stale doc and the task would visibly come back until flushNow fires.")
     }
 
+    /// Regression: same race, different entry point. The
+    /// `DispatchSourceFileSystemObject` watcher fires
+    /// `handleExternalEvent` whenever *anything* (Dropbox, the
+    /// `todarchy-mcp` CLI, another app instance) rewrites the
+    /// `tasks.automerge` file. Before the fix, that path did a
+    /// bare `mergeOrRebuild + onExternalChange` without checking
+    /// `pendingSnapshot` — so any external write during the user's
+    /// 0.25 s debounce window would notify observers from a doc
+    /// that didn't yet include the pending mutation, exactly like
+    /// the original poll-timer bug.
+    ///
+    /// This was especially visible to users running the MCP server,
+    /// since every tool call writes the file.
+    func testHandleExternalEvent_withPendingSave_appliesMutationBeforeNotifying() throws {
+        let original = TaskItem(list: "inbox", title: "complete me",
+                                 created: Date(timeIntervalSince1970: 1_700_000_000),
+                                 pos: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertNil(original.doneAt)
+        persistence.saveNow(.init(tasks: [original], projects: []))
+
+        // Schedule (but do not flush) a save that marks the task done.
+        var done = original
+        done.doneAt = Date(timeIntervalSince1970: 1_700_000_100)
+        persistence.scheduleSave(.init(tasks: [done], projects: []))
+
+        // Simulate an external writer (MCP, Dropbox, etc.) touching
+        // the file — invoke the handler the watcher would call.
+        persistence.handleExternalEvent()
+
+        // load() does `queue.sync` so it waits for the async work
+        // (flushNow, via the new pendingSnapshot guard) to finish.
+        let loaded = persistence.load()!
+        let reloaded = try XCTUnwrap(loaded.tasks.first { $0.id == original.id })
+        XCTAssertNotNil(reloaded.doneAt,
+            "handleExternalEvent during a pending save must not strand the local mutation — when MCP writes during the debounce window the user's just-completed task would otherwise come back as undone until flushNow fired.")
+    }
+
     /// Companion: when there is no pending save, refreshFromDisk
     /// still works as a plain pull/merge/notify path. (Without a
     /// server client the pull is a no-op, but we exercise the code

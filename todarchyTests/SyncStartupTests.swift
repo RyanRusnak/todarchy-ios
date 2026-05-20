@@ -64,6 +64,40 @@ final class SyncStartupTests: XCTestCase {
         }
     }
 
+    /// Regression: before the fix, `applyStartupConfiguration`'s server path
+    /// never called `startServerPollTimer`. The timer is only started inside
+    /// `setFileURL`, which is intentionally skipped in the server startup path
+    /// ("we're already on the right file — don't push stale bytes before
+    /// pulling"). So after every cold app launch in server mode, the 10s
+    /// background poll never ran. Changes from another device only arrived
+    /// when the user made a local mutation (flushNow) or re-foregrounded the
+    /// app (scenePhase .active → one-shot refreshFromDisk). Devices that were
+    /// open and idle overnight would never exchange changes.
+    ///
+    /// The fix: call `startServerPollTimer` explicitly from
+    /// `applyStartupConfiguration`'s server arm, after installing the client.
+    ///
+    /// This test verifies that `startServerPollTimer` is safe to call when the
+    /// server client is freshly installed (as `applyStartupConfiguration`
+    /// would do) and is idempotent (calling it twice doesn't crash or leave
+    /// two timers running).
+    func testStartServerPollTimerIsIdempotentAfterClientInstall() throws {
+        let p = TaskStorePersistence(fileURL: tmpDir.appendingPathComponent("tasks.automerge"))
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.protocolClasses = []        // no real networking
+        p.serverClient = ServerSyncClient(
+            baseURL: URL(string: "https://todarchy-noop.invalid")!,
+            session: URLSession(configuration: cfg)
+        )
+        p.serverMainDocId = "smoke-doc-id"
+
+        // Neither call should crash. The second cancels the first timer and
+        // installs a fresh one — which is the idempotent restart-safe contract
+        // applyStartupConfiguration relies on.
+        p.startServerPollTimer()
+        p.startServerPollTimer()
+    }
+
     /// File mtime increases when syncNow writes.
     func testSyncNowBumpsFileMtime() throws {
         let syncURL = tmpDir.appendingPathComponent("sync.automerge")

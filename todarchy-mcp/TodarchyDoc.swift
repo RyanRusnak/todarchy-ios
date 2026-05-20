@@ -24,10 +24,25 @@ final class TodarchyDoc {
         }
     }
 
-    /// Atomic save: `.tmp` sibling + rename. Same pattern as
+    /// Atomic save: re-read disk + merge any changes the app wrote
+    /// between our init and now, then write the merged bytes via
+    /// `.tmp` sibling + rename. Same pattern as
     /// `TaskStorePersistence.writeBytes` so the app's file watcher
     /// picks it up the same way.
+    ///
+    /// The pre-write merge is load-bearing: without it, the running
+    /// app could write a new task between our init and our save, and
+    /// our write would broadcast a file missing that task. Other
+    /// readers (peer devices syncing from a folder) would briefly see
+    /// the inconsistent state before the next sync round repaired it.
+    /// Automerge being a CRDT bounds the damage — but pulling the
+    /// latest bytes here means the file is internally consistent
+    /// from the moment we write it.
     func save() throws {
+        if let onDisk = try? Data(contentsOf: fileURL) {
+            let other = AutomergeStore(data: onDisk)
+            try? store.merge(other)
+        }
         let bytes = store.save()
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(),
