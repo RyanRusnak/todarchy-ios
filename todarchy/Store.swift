@@ -173,17 +173,23 @@ final class TaskStore: ObservableObject {
     // `tasks` and we'd lose that mapping otherwise.
     private var pendingTaskDeletes: [String: String] = [:]
     private var pendingProjectDeletes: Set<String> = []
+    /// Task ids whose `doneAt` was explicitly cleared by the user (uncheck).
+    /// Drained on the next save so the persistence layer tombstones the field.
+    private var pendingDoneAtClears: Set<String> = []
 
     private func scheduleSave() {
         guard let persistence else { return }
         let taskDeletes = pendingTaskDeletes
         let projectDeletes = pendingProjectDeletes
+        let doneAtClears = pendingDoneAtClears
         pendingTaskDeletes.removeAll()
         pendingProjectDeletes.removeAll()
+        pendingDoneAtClears.removeAll()
         persistence.scheduleSave(
             .init(tasks: tasks, projects: projects, contexts: contexts),
             deletedTaskIds: taskDeletes,
-            deletedProjectIds: projectDeletes
+            deletedProjectIds: projectDeletes,
+            doneAtClears: doneAtClears
         )
     }
 
@@ -364,6 +370,7 @@ final class TaskStore: ObservableObject {
         snapshot()
         if tasks[idx].doneAt != nil {
             tasks[idx].doneAt = nil
+            pendingDoneAtClears.insert(id)
         } else {
             tasks[idx].doneAt = Date()
         }

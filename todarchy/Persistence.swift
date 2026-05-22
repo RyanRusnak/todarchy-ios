@@ -52,6 +52,7 @@ final class TaskStorePersistence {
     private var pendingSnapshot: Snapshot?
     private var pendingTaskDeletes: [String: String] = [:]
     private var pendingProjectDeletes: Set<String> = []
+    private var pendingDoneAtClears: Set<String> = []
 
     var onExternalChange: (() -> Void)?
 
@@ -192,7 +193,8 @@ final class TaskStorePersistence {
     func scheduleSave(
         _ snapshot: Snapshot,
         deletedTaskIds: [String: String] = [:],
-        deletedProjectIds: Set<String> = []
+        deletedProjectIds: Set<String> = [],
+        doneAtClears: Set<String> = []
     ) {
         // Fire-and-forget onto the serial queue. This is called from the
         // main thread on every keystroke; using queue.sync here would
@@ -203,6 +205,7 @@ final class TaskStorePersistence {
             self.pendingSnapshot = snapshot
             self.pendingTaskDeletes.merge(deletedTaskIds) { _, new in new }
             self.pendingProjectDeletes.formUnion(deletedProjectIds)
+            self.pendingDoneAtClears.formUnion(doneAtClears)
             self.saveWork?.cancel()
             let work = DispatchWorkItem { [weak self] in
                 self?.flushNow()
@@ -216,12 +219,14 @@ final class TaskStorePersistence {
     func saveNow(
         _ snapshot: Snapshot,
         deletedTaskIds: [String: String] = [:],
-        deletedProjectIds: Set<String> = []
+        deletedProjectIds: Set<String> = [],
+        doneAtClears: Set<String> = []
     ) {
         onQueue {
             pendingSnapshot = snapshot
             pendingTaskDeletes.merge(deletedTaskIds) { _, new in new }
             pendingProjectDeletes.formUnion(deletedProjectIds)
+            pendingDoneAtClears.formUnion(doneAtClears)
             flushNow()
         }
     }
@@ -425,6 +430,7 @@ final class TaskStorePersistence {
             }
             for id in mainDeletes { try automerge.deleteTask(id) }
             for id in projectDeletes { try automerge.deleteProject(id) }
+            for id in pendingDoneAtClears { try? automerge.clearDoneAt(id) }
             let bytes = automerge.save()
             try writeBytes(bytes)
             mainBytesForServer = bytes
@@ -459,6 +465,7 @@ final class TaskStorePersistence {
         pendingSnapshot = nil
         pendingTaskDeletes.removeAll()
         pendingProjectDeletes.removeAll()
+        pendingDoneAtClears.removeAll()
 
         // Always refresh the UI. Even on write failure, retryOnPoison left
         // the in-memory doc loaded with the latest disk state, so the UI

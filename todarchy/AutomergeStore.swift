@@ -227,6 +227,18 @@ final class AutomergeStore {
         }
     }
 
+    /// Explicitly clear the `doneAt` field for a task — used only when
+    /// the user manually unchecks a completed task. Unlike the snapshot
+    /// write path (which never deletes doneAt), this produces a real
+    /// Automerge tombstone so the uncheck propagates to peers.
+    func clearDoneAt(_ id: String) throws {
+        try locked {
+            let tasksMap = try requireMap(key: "tasks")
+            guard case let .Object(obj, .Map) = try doc.get(obj: tasksMap, key: id) else { return }
+            try? doc.delete(obj: obj, key: "doneAt")
+        }
+    }
+
     func upsertProject(_ project: ProjectItem) throws {
         try locked { try upsertProjectUnlocked(project) }
     }
@@ -355,9 +367,11 @@ final class AutomergeStore {
         try doc.put(obj: obj, key: "created", value: .Int(task.created.millisecondsSince1970))
         if let d = task.doneAt {
             try doc.put(obj: obj, key: "doneAt", value: .Int(d.millisecondsSince1970))
-        } else {
-            try? doc.delete(obj: obj, key: "doneAt")
         }
+        // Never delete doneAt during a snapshot write — that would create an
+        // Automerge tombstone that causally supersedes a peer's completion merged
+        // in during the same flushNow pass. Explicit unchecks go through
+        // clearDoneAt() which is called separately from the doneAtClears set.
         if let d = task.deferUntil {
             try doc.put(obj: obj, key: "deferUntil", value: .Int(d.millisecondsSince1970))
         } else {
