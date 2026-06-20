@@ -8,11 +8,6 @@ struct TaskRow: View {
     var highlightedCtx: TaskContext? = nil
     var compact: Bool = false
     var isEditing: Bool = false
-    /// When true on macOS, this row picks up keyboard-driven completion
-    /// (`.todarchyToggleDone`) and runs the same `handleToggle` flow that
-    /// a checkbox click does — so space / x / ⌘K → Complete all animate
-    /// with the filled circle, pulse, and strikethrough.
-    var isSelected: Bool = false
 
     var onToggle: () -> Void = {}
     var onTapCtx: (TaskContext) -> Void = { _ in }
@@ -132,7 +127,6 @@ struct TaskRow: View {
                 .fill(Theme.border.opacity(0.6))
                 .frame(height: 1)
         }
-        .onSelectedToggleDone(isSelected: isSelected, action: handleToggle)
     }
 
     private func handleToggle() {
@@ -161,21 +155,5 @@ struct TaskRow: View {
             onToggle()
             pendingComplete = false
         }
-    }
-}
-
-private extension View {
-    /// Wires the row up to macOS's keyboard-driven Toggle Complete
-    /// (`x`, space, ⌘K → Complete) so the selected row runs the same
-    /// `handleToggle` animation a checkbox click does. No-op elsewhere.
-    @ViewBuilder
-    func onSelectedToggleDone(isSelected: Bool, action: @escaping () -> Void) -> some View {
-        #if os(macOS)
-        self.onReceive(NotificationCenter.default.publisher(for: .todarchyToggleDone)) { _ in
-            if isSelected { action() }
-        }
-        #else
-        self
-        #endif
     }
 }

@@ -12,10 +12,24 @@ struct MacRootView: View {
     @State private var showProjectEditor = false
     @State private var showVoiceCapture = false
     @State private var deferTarget: DeferTarget?
+    @State private var sendToTarget: SendToTarget?
     @State private var captureText = ""
     @StateObject private var keyMonitor = MacMainKeyMonitor()
+    @StateObject private var clickAwayResigner = MacClickAwayResigner()
 
     var body: some View {
+        // `coreView` carries the full sheet/notification modifier chain.
+        // Keeping `.focusedSceneObject` out here (rather than appended to
+        // that chain) avoids tipping the body expression past the Swift
+        // type-checker's complexity limit.
+        coreView
+            // Expose the store to menu commands (`TodarchyCommands`) for the
+            // focused window so "Toggle Complete" etc. act on this window's
+            // selection directly rather than broadcasting to every view.
+            .focusedSceneObject(store)
+    }
+
+    private var coreView: some View {
         VStack(spacing: 0) {
             NavigationSplitView {
                 MacSidebar()
@@ -67,6 +81,14 @@ struct MacRootView: View {
                              onClose: { deferTarget = nil })
                 .frame(minWidth: 520, idealWidth: 560, minHeight: 480, idealHeight: 500)
         }
+        .sheet(item: $sendToTarget) { target in
+            SendToPickerSheet(
+                taskId: target.id,
+                lists: sendToLists(for: target.id),
+                onClose: { sendToTarget = nil }
+            )
+            .frame(width: 520, height: 420)
+        }
         .sheet(isPresented: $showProjectEditor) {
             ProjectEditorSheet(onClose: { showProjectEditor = false })
                 .frame(width: 560, height: 420)
@@ -91,18 +113,16 @@ struct MacRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .todarchyOpenSearch)) { _ in
             showSearch = true
         }
-        // Toggle Complete is now consumed by the selected `TaskRow`'s
-        // own listener so the keyboard path animates exactly like a
-        // checkbox click. See `TaskRow.onSelectedToggleDone`.
         .onReceive(NotificationCenter.default.publisher(for: .todarchyDeleteSelected)) { _ in
             store.deleteSelected()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .todarchyDeferSelected)) { _ in
-            store.deferSelected()
         }
         .onReceive(NotificationCenter.default.publisher(for: .todarchyOpenDeferPicker)) { _ in
             guard let sid = store.selectedTaskId else { return }
             deferTarget = DeferTarget(id: sid)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .todarchyOpenSendTo)) { _ in
+            guard let sid = store.selectedTaskId else { return }
+            sendToTarget = SendToTarget(id: sid)
         }
         .onReceive(NotificationCenter.default.publisher(for: .todarchyOpenProjectEditor)) { _ in
             showProjectEditor = true
@@ -120,16 +140,25 @@ struct MacRootView: View {
         .onAppear {
             keyMonitor.store = store
             keyMonitor.install()
+            clickAwayResigner.install()
             if store.selectedTaskId == nil {
                 store.selectFirst()
             }
         }
         .onDisappear {
             keyMonitor.uninstall()
+            clickAwayResigner.uninstall()
         }
         .onChange(of: showPalette) { _, v in keyMonitor.paletteShowing = v }
         .onChange(of: showCapture) { _, v in keyMonitor.captureShowing = v }
         .onChange(of: showSearch) { _, v in keyMonitor.searchShowing = v }
+    }
+
+    /// Destination lists for the send-to picker — every list except the one
+    /// the task already lives in, so each row is a real move.
+    private func sendToLists(for taskId: String) -> [ProjectItem] {
+        let currentList = store.tasks.first(where: { $0.id == taskId })?.list
+        return store.allLists.filter { $0.id != currentList }
     }
 }
 
@@ -406,8 +435,9 @@ private struct MacSidebar: View {
             hint("⇥", "indent")
             hint("z", "collapse")
             hint("u", "undo")
-            hint("dd", "delete")
-            hint("s", "defer")
+            hint("d", "defer")
+            hint("s", "send to")
+            hint("⌫", "delete")
             hint("i", "inspector")
             hint("/", "search")
             hint(":", "command")
@@ -461,7 +491,6 @@ private struct MacMainView: View {
                                     showList: store.activeContextFilter != nil,
                                     highlightedCtx: store.activeContextFilter,
                                     isEditing: store.editingTaskId == row.task.id,
-                                    isSelected: row.task.id == store.selectedTaskId,
                                     onToggle: {
                                         withAnimation(.easeInOut(duration: 0.18)) {
                                             store.toggleDone(row.task.id)

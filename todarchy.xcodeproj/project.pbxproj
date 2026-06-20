@@ -126,6 +126,7 @@
 		A34BCAE3F3702ABB3B32B0AD /* JetBrainsMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 0A682077F8B4D2AB9BBEA184 /* JetBrainsMono-Regular.ttf */; };
 		A3C4F2CD3B4438006BFEFA14 /* IOSUndoToast.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41B0DF860A44D0E23E42A071 /* IOSUndoToast.swift */; };
 		A56B3599B19E58EE6D581B98 /* DeferPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1647D10D33DA90DED8D00CA5 /* DeferPickerSheet.swift */; };
+		AAAA0003BBBB0003CCCC0003 /* SendToPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA0004BBBB0004CCCC0004 /* SendToPickerSheet.swift */; };
 		A6896E12F188113DD7728BDE /* KeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 067BFA66B5D0E7833ED12AF9 /* KeyStoreTests.swift */; };
 		A7A8B5F76ED6C6250B96FDE4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C52599CA7FD8433F06D1580B /* Assets.xcassets */; };
 		A837FBF829B1E007F004C54A /* KeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5FA7BDF689C2EA74CBDB12D /* KeyStore.swift */; };
@@ -160,6 +161,7 @@
 		D2C09DEAD76E0738561A193F /* Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03E353E1DAC40308080C2407 /* Snapshot.swift */; };
 		D44F83271AEB23C1978C27EF /* JetBrainsMono-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DCBDF6E6B72998EDB2CABC39 /* JetBrainsMono-Medium.ttf */; };
 		D705BE5829474065E76D1FFF /* DeferPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EC97B2F11853372ADC6BBA7 /* DeferPickerSheet.swift */; };
+		AAAA0001BBBB0001CCCC0001 /* SendToPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA0002BBBB0002CCCC0002 /* SendToPickerSheet.swift */; };
 		D99F1676EC03A962C0B9E215 /* SharedConflictIngestionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C2A4A0FA7C59C4C5A46BAC /* SharedConflictIngestionTests.swift */; };
 		DE6DFBE955CFEAF9AC48F99E /* DeferParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A8D964C75F099D334E23726 /* DeferParser.swift */; };
 		DF5A2546281ECB5D75D637AB /* ShareKeysMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ABAD0DDFEDD1ED71B791B50 /* ShareKeysMap.swift */; };
@@ -204,6 +206,7 @@
 		132274FFD2E1D75D4B7D8D59 /* ExportImport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ExportImport.swift; sourceTree = "<group>"; };
 		14BA2D075A7A67A27045A2B5 /* MacSyncSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MacSyncSettingsView.swift; path = todarchy/macOS/MacSyncSettingsView.swift; sourceTree = "<group>"; };
 		1647D10D33DA90DED8D00CA5 /* DeferPickerSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DeferPickerSheet.swift; path = todarchy/macOS/DeferPickerSheet.swift; sourceTree = "<group>"; };
+		AAAA0004BBBB0004CCCC0004 /* SendToPickerSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SendToPickerSheet.swift; path = todarchy/macOS/SendToPickerSheet.swift; sourceTree = "<group>"; };
 		1877E3AF8B574A57A090784C /* ContextStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContextStoreTests.swift; sourceTree = "<group>"; };
 		1AF39E29E32FDD639775D26E /* Snapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Snapshot.swift; path = todarchy/Shared/Snapshot.swift; sourceTree = "<group>"; };
 		1B5C80AB56741689C69104EF /* Parser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Parser.swift; path = todarchy/Parser.swift; sourceTree = "<group>"; };
@@ -258,6 +261,7 @@
 		5A3BD4EF18B144DF64215EB1 /* DeferNotifierTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DeferNotifierTests.swift; sourceTree = "<group>"; };
 		5E050D7613E7338C10DC0A2A /* InspectorEditorState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = InspectorEditorState.swift; path = todarchy/Shared/InspectorEditorState.swift; sourceTree = "<group>"; };
 		5EC97B2F11853372ADC6BBA7 /* DeferPickerSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DeferPickerSheet.swift; sourceTree = "<group>"; };
+		AAAA0002BBBB0002CCCC0002 /* SendToPickerSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SendToPickerSheet.swift; sourceTree = "<group>"; };
 		5F5F5BFE3222D582B5E9875D /* AutomergeStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AutomergeStore.swift; path = todarchy/AutomergeStore.swift; sourceTree = "<group>"; };
 		5FB8EEF6DC1087A8ADD43B23 /* SyncSettingsSharingTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SyncSettingsSharingTests.swift; sourceTree = "<group>"; };
 		5FE12DB3CA6BC62E3128519A /* MacKeyRouter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MacKeyRouter.swift; path = todarchy/macOS/MacKeyRouter.swift; sourceTree = "<group>"; };
@@ -425,6 +429,7 @@
 				C897FA272941E19858EDCE3B /* CommandPalette.swift */,
 				46C3B9AA2667EA3CDF16C372 /* ContextEditorSheet.swift */,
 				5EC97B2F11853372ADC6BBA7 /* DeferPickerSheet.swift */,
+				AAAA0002BBBB0002CCCC0002 /* SendToPickerSheet.swift */,
 				E87C4572E0FCBF8B65E02256 /* ExportImportActions.swift */,
 				A11C412E17DABEF2EC223802 /* GlobalHotkey.swift */,
 				CCC600E365E96621350D93F1 /* MacCaptureWindow.swift */,
@@ -623,6 +628,7 @@
 				27AA6698741980B20A462A19 /* CommandPalette.swift */,
 				235D3A2786F7DA26DDFF069D /* ContextEditorSheet.swift */,
 				1647D10D33DA90DED8D00CA5 /* DeferPickerSheet.swift */,
+				AAAA0004BBBB0004CCCC0004 /* SendToPickerSheet.swift */,
 				E72351E0BA7EC0D034639DD0 /* ExportImportActions.swift */,
 				2298A93B6ACF9EE2F912D832 /* GlobalHotkey.swift */,
 				7057680AE26DAEED323561C9 /* MacCaptureWindow.swift */,
@@ -844,6 +850,7 @@
 				3081763982E09B25858AC9EF /* CommandPalette.swift in Sources */,
 				6AF7B685AC7D55ED1F669456 /* ContextEditorSheet.swift in Sources */,
 				D705BE5829474065E76D1FFF /* DeferPickerSheet.swift in Sources */,
+				AAAA0001BBBB0001CCCC0001 /* SendToPickerSheet.swift in Sources */,
 				6ED2A462FD723D8CEB538F95 /* ExportImportActions.swift in Sources */,
 				4434DE5C9C66DA58AE535B66 /* GlobalHotkey.swift in Sources */,
 				3845283BC3BE503EA3F2D78C /* MacCaptureWindow.swift in Sources */,
@@ -965,6 +972,7 @@
 				E2BD875C49D84E7A5D8AA216 /* CommandPalette.swift in Sources */,
 				87195C17C4BE2635FEB2B416 /* ContextEditorSheet.swift in Sources */,
 				A56B3599B19E58EE6D581B98 /* DeferPickerSheet.swift in Sources */,
+				AAAA0003BBBB0003CCCC0003 /* SendToPickerSheet.swift in Sources */,
 				CBA87EC1D4728FF0F9D545DD /* ExportImportActions.swift in Sources */,
 				85024F012E1F900A51601C17 /* GlobalHotkey.swift in Sources */,
 				7A67EE88D87379E45B3DA2FB /* MacCaptureWindow.swift in Sources */,
@@ -1046,7 +1054,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.35;
+				MARKETING_VERSION = 0.36;
 				PRODUCT_BUNDLE_IDENTIFIER = com.todarchy.app;
 				PRODUCT_NAME = todarchy;
 				SDKROOT = auto;
@@ -1302,7 +1310,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.35;
+				MARKETING_VERSION = 0.36;
 				PRODUCT_BUNDLE_IDENTIFIER = com.todarchy.app;
 				PRODUCT_NAME = todarchy;
 				SDKROOT = auto;

@@ -6,11 +6,11 @@ final class LeaderSequenceTests: XCTestCase {
 
     // MARK: - dd / fd / fs
 
-    func testDdDeletes() {
+    func testDDefersAndIsNotALeader() {
         var r = MainKeyRouter()
-        let now = Date()
-        XCTAssertEqual(r.route(chars: "d", keyCode: 0, now: now), .pass)
-        XCTAssertEqual(r.route(chars: "d", keyCode: 0, now: now.addingTimeInterval(0.1)), .deleteSelected)
+        // `d` used to be the delete leader (`dd`); it's now the defer key and
+        // fires immediately on the first press (delete moved to the ⌫ key).
+        XCTAssertEqual(r.route(chars: "d", keyCode: 0), .deferSelected)
     }
 
     func testFdTogglesShowDone() {
@@ -83,18 +83,18 @@ final class LeaderSequenceTests: XCTestCase {
     func testUnknownSequenceFallsThroughToSingleKey() {
         var r = MainKeyRouter()
         let now = Date()
-        // `d` sets pending.
-        _ = r.route(chars: "d", keyCode: 0, now: now)
-        // `j` doesn't match `dj`, so pending is cleared and `j` is applied.
+        // `g` sets pending.
+        _ = r.route(chars: "g", keyCode: 0, now: now)
+        // `j` doesn't match `gj`, so pending is cleared and `j` is applied.
         XCTAssertEqual(r.route(chars: "j", keyCode: 0, now: now.addingTimeInterval(0.1)), .selectNext)
     }
 
     func testLeaderTimesOut() {
         var r = MainKeyRouter()
         let now = Date()
-        _ = r.route(chars: "d", keyCode: 0, now: now)
-        // 1.0s later, pending has expired. A `d` is just a new leader — .pass.
-        XCTAssertEqual(r.route(chars: "d", keyCode: 0, now: now.addingTimeInterval(1.0)), .pass)
+        _ = r.route(chars: "g", keyCode: 0, now: now)
+        // 1.0s later, pending has expired. A lone `g` is just a new leader — .pass.
+        XCTAssertEqual(r.route(chars: "g", keyCode: 0, now: now.addingTimeInterval(1.0)), .pass)
     }
 
     // MARK: - Aliases

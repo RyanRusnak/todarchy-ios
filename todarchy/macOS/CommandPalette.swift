@@ -13,7 +13,7 @@ struct PaletteCommand: Identifiable, Hashable {
 }
 
 /// Extracted so the palette's filter + selection logic is unit-testable without a view.
-final class CommandPaletteModel: ObservableObject {
+final class CommandPaletteModel: ObservableObject, PaletteNavigable {
     @Published var query: String = "" {
         didSet { clampHighlight() }
     }
@@ -172,14 +172,14 @@ struct CommandPalette: View {
             .init(name: "Toggle Show Done", hint: nil) { store.showDone.toggle() },
             .init(name: "Toggle Show Deferred", hint: nil) { store.showDeferred.toggle() },
             .init(name: "Complete Selected", hint: "x") {
-                NotificationCenter.default.post(name: .todarchyToggleDone, object: nil)
+                _ = store.toggleSelectedDone()
             },
-            .init(name: "Defer Selected 24h", hint: "s") { store.deferSelected() },
+            .init(name: "Defer Selected 24h", hint: nil) { store.deferSelected() },
             .init(name: "Delete Selected", hint: "⌫") { store.deleteSelected() },
             .init(name: "Manage Projects", hint: "gn") {
                 NotificationCenter.default.post(name: .todarchyOpenProjectEditor, object: nil)
             },
-            .init(name: "Defer Selected…", hint: "s") {
+            .init(name: "Defer Selected…", hint: "d") {
                 NotificationCenter.default.post(name: .todarchyOpenDeferPicker, object: nil)
             },
             .init(name: "Edit Selected", hint: "e") {

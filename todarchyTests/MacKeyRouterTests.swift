@@ -45,9 +45,35 @@ final class MacKeyRouterTests: XCTestCase {
         XCTAssertEqual(router.route(chars: "O", keyCode: 0, modifiers: .shift), .openCapture)
     }
 
-    func testSDefers() {
+    func testDDefers() {
         var router = MainKeyRouter()
-        XCTAssertEqual(router.route(chars: "s", keyCode: 0), .deferSelected)
+        // `d` defers immediately (not a leader anymore — no `dd` delete).
+        XCTAssertEqual(router.route(chars: "d", keyCode: 0), .deferSelected)
+    }
+
+    func testSOpensSendTo() {
+        var router = MainKeyRouter()
+        // `s` no longer defers — it opens the send-to project picker.
+        XCTAssertEqual(router.route(chars: "s", keyCode: 0), .openSendTo)
+    }
+
+    func testMonitorApplyOpenSendToPostsNotification() {
+        let monitor = MacMainKeyMonitor()
+        let exp = expectation(forNotification: .todarchyOpenSendTo, object: nil)
+        _ = monitor.apply(.openSendTo)
+        wait(for: [exp], timeout: 1.0)
+    }
+
+    func testFDStillTogglesShowDone() {
+        // `d` following the `f` leader must still resolve to `fd` — the
+        // pending-leader pass runs before the single-key `d` defer binding.
+        var router = MainKeyRouter()
+        let now = Date()
+        XCTAssertEqual(router.route(chars: "f", keyCode: 0, now: now), .pass)
+        XCTAssertEqual(
+            router.route(chars: "d", keyCode: 0, now: now.addingTimeInterval(0.1)),
+            .toggleShowDone
+        )
     }
 
     func testSpaceTogglesComplete() {
@@ -388,20 +414,70 @@ final class MacKeyRouterTests: XCTestCase {
         XCTAssertNotEqual(store.selectedTaskId, first)
     }
 
-    func testMonitorApplyToggleComplete() {
-        // .toggleComplete now posts `.todarchyToggleDone`; the selected
-        // TaskRow consumes it and runs its animated handleToggle, which
-        // is what commits the store mutation. Verify the routing side
-        // here (the post) — the row's animation/commit is exercised
-        // via the UI, not unit tests.
+    func testMonitorApplyToggleCompleteTogglesSelected() {
+        // .toggleComplete mutates the store by selection id directly. A
+        // single keypress must flip exactly the selected task's done-state.
         let store = TaskStore.ephemeral()
         store.activeSelection = .list("p_work")
         store.selectFirst()
+        let selected = store.selectedTaskId!
+        XCTAssertFalse(store.tasks.first(where: { $0.id == selected })!.isDone)
         let monitor = MacMainKeyMonitor()
         monitor.store = store
-        let exp = expectation(forNotification: .todarchyToggleDone, object: nil)
         XCTAssertTrue(monitor.apply(.toggleComplete))
-        wait(for: [exp], timeout: 1.0)
+        XCTAssertTrue(store.tasks.first(where: { $0.id == selected })!.isDone)
+    }
+
+    func testMonitorApplyToggleCompleteLeavesOtherTasksUntouched() {
+        // Regression guard for the phantom-completion bug: toggling the
+        // selected task must NOT change the done-state of any other task.
+        // The old broadcast (`.todarchyToggleDone`) was observed by every
+        // mounted TaskRow and acted on stale `isSelected` captures, so one
+        // keypress completed (or un-completed) unrelated tasks across
+        // projects. Routing through the store by selection id makes that
+        // structurally impossible.
+        let store = TaskStore.ephemeral()
+        // Pre-complete one task in another project so we can detect a
+        // spurious un-complete as well as a spurious complete.
+        let weddingFirst = store.tasks.first(where: { $0.list == "p_wedding" })!.id
+        store.toggleDone(weddingFirst)
+
+        store.activeSelection = .list("p_work")
+        store.selectFirst()
+        let selected = store.selectedTaskId!
+
+        let othersBefore: [String: Bool] = Dictionary(
+            uniqueKeysWithValues: store.tasks
+                .filter { $0.id != selected }
+                .map { ($0.id, $0.isDone) }
+        )
+
+        let monitor = MacMainKeyMonitor()
+        monitor.store = store
+        XCTAssertTrue(monitor.apply(.toggleComplete))
+
+        XCTAssertTrue(store.tasks.first(where: { $0.id == selected })!.isDone)
+        for (id, wasDone) in othersBefore {
+            XCTAssertEqual(
+                store.tasks.first(where: { $0.id == id })!.isDone,
+                wasDone,
+                "Task \(id) changed done-state when a different task was toggled"
+            )
+        }
+    }
+
+    func testMonitorApplyToggleCompleteWithNoSelectionChangesNothing() {
+        let store = TaskStore.ephemeral()
+        store.selectedTaskId = nil
+        let before: [String: Bool] = Dictionary(
+            uniqueKeysWithValues: store.tasks.map { ($0.id, $0.isDone) }
+        )
+        let monitor = MacMainKeyMonitor()
+        monitor.store = store
+        _ = monitor.apply(.toggleComplete)
+        for (id, wasDone) in before {
+            XCTAssertEqual(store.tasks.first(where: { $0.id == id })!.isDone, wasDone)
+        }
     }
 
     func testMonitorApplyDelete() {
@@ -421,9 +497,7 @@ final class MacKeyRouterTests: XCTestCase {
     }
 
     func testMonitorApplyUndoRestoresState() {
-        // .toggleComplete is now async (posts a notification; commit
-        // happens in TaskRow.handleToggle). Drive the toggle directly
-        // here to keep the undo-roundtrip assertion focused on the
+        // Drive the toggle directly to keep this assertion focused on the
         // undo system rather than the keyboard-routing plumbing.
         let store = TaskStore.ephemeral()
         store.activeSelection = .list("p_work")

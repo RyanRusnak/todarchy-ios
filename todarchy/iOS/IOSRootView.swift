@@ -4,6 +4,12 @@ import SwiftUI
 struct IOSRootView: View {
     @EnvironmentObject var store: TaskStore
     @State private var presenting: IOSSheet?
+    /// Set when a sheet wants to hand off to the defer picker. SwiftUI
+    /// won't swap one `.sheet(item:)` sheet for another by reassigning the
+    /// binding in place, so the detail sheet stashes the task id here,
+    /// dismisses itself, and `onDismiss` presents the picker once the
+    /// dismissal completes.
+    @State private var pendingDefer: String?
     @State private var showSettings = false
     @State private var quickAddText = ""
     @State private var quickAddFocused = false
@@ -89,7 +95,16 @@ struct IOSRootView: View {
                 onClose: { showSettings = false }
             )
         }
-        .sheet(item: $presenting, onDismiss: { store.selectedTaskId = nil }) { which in
+        .sheet(item: $presenting, onDismiss: {
+            // A sheet asked to hand off to the defer picker. The previous
+            // sheet has now fully dismissed, so it's safe to present.
+            if let id = pendingDefer {
+                pendingDefer = nil
+                presenting = .deferPicker(id)
+                return
+            }
+            store.selectedTaskId = nil
+        }) { which in
             switch which {
             case .listSwitcher:
                 ListSwitcherSheet(
@@ -108,7 +123,14 @@ struct IOSRootView: View {
                     .presentationDragIndicator(.visible)
             case .taskDetail:
                 TaskDetailSheet(
-                    onDefer: { id in presenting = .deferPicker(id) },
+                    onDefer: { id in
+                        // Hand off to the defer picker: stash the id and
+                        // dismiss; `onDismiss` re-presents once we're clear.
+                        // Reassigning `presenting` in place wouldn't swap the
+                        // sheet — SwiftUI drops the change while one is shown.
+                        pendingDefer = id
+                        presenting = nil
+                    },
                     onClose: { presenting = nil }
                 )
                 .presentationDetents([.large])

@@ -50,6 +50,7 @@ enum MainKeyIntent: Equatable {
     case openCapture
     case openPalette
     case openSearch
+    case openSendTo
     case toggleInspector
     case toggleShowDone
     case toggleShowDeferred
@@ -66,7 +67,7 @@ enum MainKeyIntent: Equatable {
 }
 
 /// Pure key routing for the main window. Holds a small leader-key buffer for
-/// vim-style two-character sequences (`dd`, `gg`, `fd`, `fs`, `gi`, `g1`–`g5`,
+/// vim-style two-character sequences (`gg`, `fd`, `fs`, `gi`, `g1`–`g5`,
 /// `mi`, `m1`–`m5`).
 struct MainKeyRouter {
     var pendingLeader: (key: Character, at: Date)?
@@ -131,8 +132,9 @@ struct MainKeyRouter {
         case "K": return .moveSelectedUp
         case "x", " ": return .toggleComplete
         case "o", "O", "a": return .openCapture
-        case "s": return .deferSelected
+        case "d": return .deferSelected
         case "i": return .toggleInspector
+        case "s": return .openSendTo
         case "e": return .editSelected
         case "z": return .toggleCollapseSelected
         case "u": return .undo
@@ -149,7 +151,7 @@ struct MainKeyRouter {
         case "5": return .gotoList(5)
 
         // Leaders — swallow the key and wait for a follow-up.
-        case "g", "d", "f", "m":
+        case "g", "f", "m":
             pendingLeader = (Character(chars), now)
             return .pass
 
@@ -169,7 +171,6 @@ struct MainKeyRouter {
         case ("g", "3"): return .gotoList(3)
         case ("g", "4"): return .gotoList(4)
         case ("g", "5"): return .gotoList(5)
-        case ("d", "d"): return .deleteSelected
         case ("f", "d"): return .toggleShowDone
         case ("f", "s"): return .toggleShowDeferred
         case ("m", "i"): return .moveSelectedToList(0)
@@ -260,10 +261,17 @@ final class MacMainKeyMonitor: ObservableObject {
         case .selectFirst: store?.selectFirst(); return true
         case .selectLast: store?.selectLast(); return true
         case .toggleComplete:
-            // Posted instead of mutating the store directly so the
-            // selected `TaskRow` runs its own animated `handleToggle`
-            // (fill + pulse + strikethrough), matching the click path.
-            NotificationCenter.default.post(name: .todarchyToggleDone, object: nil)
+            // Toggle the selected task directly. This used to post a
+            // broadcast notification that every mounted `TaskRow` observed
+            // and acted on when its captured `isSelected` was true — stale
+            // rows (offscreen lazy rows, background windows) carried a
+            // true flag from an earlier render, so one keypress toggled
+            // several unrelated tasks at once. Going through the store by
+            // selection id means only the selected task can change.
+            guard let store else { return false }
+            withAnimation(.easeInOut(duration: 0.18)) {
+                _ = store.toggleSelectedDone()
+            }
             return true
         case .deleteSelected: store?.deleteSelected(); return true
         case .deferSelected:
@@ -279,6 +287,13 @@ final class MacMainKeyMonitor: ObservableObject {
             return true
         case .openSearch:
             NotificationCenter.default.post(name: .todarchyOpenSearch, object: nil)
+            return true
+        case .openSendTo:
+            // Only meaningful when a task is selected; the root view's
+            // handler bails out if `selectedTaskId` is nil, so consuming
+            // the key unconditionally is fine — it just no-ops with an
+            // empty selection, same as the defer picker.
+            NotificationCenter.default.post(name: .todarchyOpenSendTo, object: nil)
             return true
         case .toggleInspector:
             NotificationCenter.default.post(name: .todarchyToggleInspector, object: nil)
@@ -315,11 +330,23 @@ final class MacMainKeyMonitor: ObservableObject {
 
 // MARK: - Palette monitor
 
-/// Local key monitor for the command palette. Intercepts navigation keys
-/// before the palette's text field can see them.
+/// A vertically-navigable, filterable list that the palette key monitor can
+/// drive. Both the command palette and the send-to project picker conform,
+/// so they share one key-handling path.
+@MainActor
+protocol PaletteNavigable: AnyObject {
+    func moveUp()
+    func moveDown()
+    /// Commit the highlighted item. Returns true if something was committed.
+    @discardableResult func execute() -> Bool
+}
+
+/// Local key monitor for palette-style sheets (command palette, send-to
+/// picker). Intercepts navigation keys before the sheet's text field can
+/// see them.
 @MainActor
 final class MacPaletteKeyMonitor: ObservableObject {
-    weak var model: CommandPaletteModel?
+    weak var model: (any PaletteNavigable)?
     var onClose: (() -> Void)?
     private var monitor: Any?
 
@@ -371,6 +398,71 @@ enum MacFocusInspector {
         if let tv = fr as? NSTextView { return tv.isEditable }
         if fr is NSText { return true }
         return false
+    }
+}
+
+// MARK: - Click-away focus resigner
+
+/// Resigns first responder when the user clicks outside the text field they're
+/// editing. SwiftUI on macOS doesn't blur a `TextField`/`TextEditor` just
+/// because you click empty space — the field keeps focus, which both swallows
+/// the vim key bindings and (via `@FocusState` change handlers) blocks panes
+/// like the inspector body editor from closing. A window-level mouse-down
+/// monitor fixes every text field at once: if the click lands outside the
+/// currently-edited field, we make the window's first responder nil, which
+/// propagates back to the SwiftUI focus binding.
+@MainActor
+final class MacClickAwayResigner: ObservableObject {
+    private var monitor: Any?
+
+    func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { event in
+            MacClickAwayResigner.resignIfClickOutsideEditor(event)
+            // Never consume the click — the field still needs to handle taps
+            // that land inside it, and clicks on other controls must proceed.
+            return event
+        }
+    }
+
+    func uninstall() {
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+    }
+
+    deinit {
+        if let m = monitor { NSEvent.removeMonitor(m) }
+    }
+
+    /// If an editable text control holds focus and the click landed outside
+    /// it, resign first responder. Exposed `static` so the logic is reachable
+    /// for inspection/testing without an installed monitor.
+    static func resignIfClickOutsideEditor(_ event: NSEvent) {
+        guard let window = event.window ?? NSApp.keyWindow else { return }
+        let fr = window.firstResponder
+
+        // Only act when something editable is actually focused.
+        guard let editorOwner = editableOwner(for: fr) else { return }
+
+        // Did the click land inside the field being edited? If so, leave it
+        // alone so the user can reposition the cursor / select text.
+        let hit = window.contentView?.hitTest(event.locationInWindow)
+        if let hit, hit.isDescendant(of: editorOwner) { return }
+
+        window.makeFirstResponder(nil)
+    }
+
+    /// The on-screen view that "owns" the current text editing session, or nil
+    /// if nothing editable is focused. For an `NSTextField`, the first
+    /// responder is the window's shared field editor (an `NSTextView`) whose
+    /// delegate is the field itself — we return the field so clicks anywhere
+    /// inside it (including its padding) count as "inside".
+    private static func editableOwner(for fr: NSResponder?) -> NSView? {
+        if let tv = fr as? NSTextView, tv.isEditable {
+            if let delegateView = tv.delegate as? NSView { return delegateView }
+            return tv
+        }
+        if let text = fr as? NSText, text.isEditable { return text }
+        return nil
     }
 }
 #endif

@@ -6,17 +6,21 @@ extension Notification.Name {
     static let todarchyOpenCapture = Notification.Name("todarchy.openCapture")
     static let todarchyOpenSearch = Notification.Name("todarchy.openSearch")
     static let todarchyToggleInspector = Notification.Name("todarchy.toggleInspector")
-    static let todarchyToggleDone = Notification.Name("todarchy.toggleDone")
     static let todarchyDeleteSelected = Notification.Name("todarchy.deleteSelected")
-    static let todarchyDeferSelected = Notification.Name("todarchy.deferSelected")
     static let todarchyUndo = Notification.Name("todarchy.undo")
     static let todarchyOpenDeferPicker = Notification.Name("todarchy.openDeferPicker")
+    static let todarchyOpenSendTo = Notification.Name("todarchy.openSendTo")
     static let todarchyOpenProjectEditor = Notification.Name("todarchy.openProjectEditor")
     static let todarchySyncNow = Notification.Name("todarchy.syncNow")
     static let todarchyOpenVoiceCapture = Notification.Name("todarchy.openVoiceCapture")
 }
 
 struct TodarchyCommands: Commands {
+    /// Resolved from the focused scene via `.focusedSceneObject(store)` in
+    /// `MacRootView`. Lets menu items act on the active window's store
+    /// directly instead of broadcasting a notification every view observes.
+    @FocusedObject private var store: TaskStore?
+
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Task") {
@@ -39,14 +43,14 @@ struct TodarchyCommands: Commands {
 
         CommandMenu("Task") {
             Button("Toggle Complete") {
-                NotificationCenter.default.post(name: .todarchyToggleDone, object: nil)
+                _ = store?.toggleSelectedDone()
             }
             .keyboardShortcut("x", modifiers: [])
 
             Button("Defer…") {
-                NotificationCenter.default.post(name: .todarchyDeferSelected, object: nil)
+                NotificationCenter.default.post(name: .todarchyOpenDeferPicker, object: nil)
             }
-            .keyboardShortcut("s", modifiers: [])
+            .keyboardShortcut("d", modifiers: .command)
 
             Divider()
 
