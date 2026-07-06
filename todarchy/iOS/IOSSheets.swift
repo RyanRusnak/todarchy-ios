@@ -545,9 +545,7 @@ struct DeferPickerSheet: View {
     }
 
     private var tomorrow9: Date {
-        let cal = Calendar.current
-        guard let t = cal.date(byAdding: .day, value: 1, to: Date()) else { return plusDays(1) }
-        return cal.date(bySettingHour: 9, minute: 0, second: 0, of: t) ?? t
+        DeferParser.tomorrow()
     }
 
     private var weekendAt9: Date {

@@ -102,4 +102,21 @@ final class DeferParserTests: XCTestCase {
         XCTAssertEqual(DeferParser.parse("  tomorrow  ", now: now, calendar: cal),
                        d(2026, 4, 21, 9, 0))
     }
+
+    // MARK: - tomorrow() quick-defer helper
+
+    func testTomorrowHelperLandsAfterMidnightNotPlus24h() {
+        // Deferring at 22:00 must resurface tomorrow at 09:00 (after
+        // midnight), NOT 22:00 tomorrow (a raw 24-hour offset).
+        let now = d(2026, 4, 20, 22, 0)
+        XCTAssertEqual(DeferParser.tomorrow(now: now, calendar: cal),
+                       d(2026, 4, 21, 9, 0))
+    }
+
+    func testTomorrowHelperFromEarlyMorning() {
+        // Even deferring at 01:00 lands on the *next* day, not today.
+        let now = d(2026, 4, 20, 1, 0)
+        XCTAssertEqual(DeferParser.tomorrow(now: now, calendar: cal),
+                       d(2026, 4, 21, 9, 0))
+    }
 }

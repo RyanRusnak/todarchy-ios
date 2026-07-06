@@ -64,6 +64,15 @@ extension TaskStore {
         return true
     }
 
+    /// Defer the selected task until tomorrow morning (start of the next day at
+    /// 09:00), rather than a raw 24-hour offset. Returns true if deferred.
+    @discardableResult
+    func deferSelectedToTomorrow() -> Bool {
+        guard let id = selectedTaskId else { return false }
+        defer_(id, until: DeferParser.tomorrow())
+        return true
+    }
+
     /// Swap the selected task with the next task in the same sort group
     /// (matching done-state + due bucket). Returns true on success.
     @discardableResult

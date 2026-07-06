@@ -129,6 +129,14 @@ final class StoreNavigationTests: XCTestCase {
         XCTAssertGreaterThan(t.deferUntil!, Date())
     }
 
+    func testDeferSelectedToTomorrowLandsTomorrowMorning() {
+        store.selectFirst()
+        let id = store.selectedTaskId!
+        XCTAssertTrue(store.deferSelectedToTomorrow())
+        let t = store.tasks.first(where: { $0.id == id })!
+        XCTAssertEqual(t.deferUntil, DeferParser.tomorrow())
+    }
+
     // MARK: - add
 
     func testAddFromQuickAddInsertsParsed() {

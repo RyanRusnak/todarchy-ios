@@ -174,7 +174,7 @@ struct CommandPalette: View {
             .init(name: "Complete Selected", hint: "x") {
                 _ = store.toggleSelectedDone()
             },
-            .init(name: "Defer Selected 24h", hint: nil) { store.deferSelected() },
+            .init(name: "Defer Selected to Tomorrow", hint: nil) { store.deferSelectedToTomorrow() },
             .init(name: "Delete Selected", hint: "⌫") { store.deleteSelected() },
             .init(name: "Manage Projects", hint: "gn") {
                 NotificationCenter.default.post(name: .todarchyOpenProjectEditor, object: nil)

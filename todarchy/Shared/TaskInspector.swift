@@ -61,7 +61,7 @@ struct TaskInspectorContent: View {
 
                     HStack(spacing: 8) {
                         Button {
-                            store.defer_(task.id, until: Date().addingTimeInterval(24 * 3600))
+                            store.defer_(task.id, until: DeferParser.tomorrow())
                         } label: {
                             Text("defer")
                                 .font(Typo.mono(12, weight: .semibold))

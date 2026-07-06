@@ -74,6 +74,18 @@ enum DeferParser {
         return nil
     }
 
+    /// The canonical "tomorrow" defer target: the start of the next day at
+    /// 09:00 local time. Quick-defer actions use this so a task deferred late
+    /// in the day resurfaces tomorrow morning — after midnight — rather than a
+    /// raw 24-hour offset that would land at the same clock time tomorrow.
+    static func tomorrow(now: Date = Date(), calendar: Calendar = .current) -> Date {
+        var cal = calendar
+        cal.timeZone = calendar.timeZone
+        let startOfTomorrow = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now))
+        return startOfTomorrow.flatMap { atNine($0, cal: cal) }
+            ?? now.addingTimeInterval(24 * 3600)
+    }
+
     private static func atNine(_ date: Date, cal: Calendar) -> Date? {
         cal.date(bySettingHour: 9, minute: 0, second: 0, of: date)
     }

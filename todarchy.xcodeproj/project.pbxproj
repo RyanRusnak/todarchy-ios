@@ -1054,7 +1054,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.36;
+				MARKETING_VERSION = 0.37;
 				PRODUCT_BUNDLE_IDENTIFIER = com.todarchy.app;
 				PRODUCT_NAME = todarchy;
 				SDKROOT = auto;
@@ -1310,7 +1310,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.36;
+				MARKETING_VERSION = 0.37;
 				PRODUCT_BUNDLE_IDENTIFIER = com.todarchy.app;
 				PRODUCT_NAME = todarchy;
 				SDKROOT = auto;
