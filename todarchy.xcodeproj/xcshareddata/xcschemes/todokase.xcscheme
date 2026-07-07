@@ -14,9 +14,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "20F0599FCA9B3804BA0146C0"
-               BuildableName = "todarchy.app"
-               BlueprintName = "todarchy"
+               BlueprintIdentifier = "FBDC1B0F50574BE8122B0E86"
+               BuildableName = "todokase"
+               BlueprintName = "todokase"
                ReferencedContainer = "container:todarchy.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -30,23 +30,13 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "20F0599FCA9B3804BA0146C0"
-            BuildableName = "todarchy.app"
-            BlueprintName = "todarchy"
+            BlueprintIdentifier = "FBDC1B0F50574BE8122B0E86"
+            BuildableName = "todokase"
+            BlueprintName = "todokase"
             ReferencedContainer = "container:todarchy.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "EDAFBE3E02867270847F97A0"
-               BuildableName = "todarchyTests.xctest"
-               BlueprintName = "todarchyTests"
-               ReferencedContainer = "container:todarchy.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -63,9 +53,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "20F0599FCA9B3804BA0146C0"
-            BuildableName = "todarchy.app"
-            BlueprintName = "todarchy"
+            BlueprintIdentifier = "FBDC1B0F50574BE8122B0E86"
+            BuildableName = "todokase"
+            BlueprintName = "todokase"
             ReferencedContainer = "container:todarchy.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -80,9 +70,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "20F0599FCA9B3804BA0146C0"
-            BuildableName = "todarchy.app"
-            BlueprintName = "todarchy"
+            BlueprintIdentifier = "FBDC1B0F50574BE8122B0E86"
+            BuildableName = "todokase"
+            BlueprintName = "todokase"
             ReferencedContainer = "container:todarchy.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

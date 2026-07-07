@@ -129,7 +129,7 @@ common = {
   'CLANG_ENABLE_MODULES' => 'YES',
   'ENABLE_PREVIEWS' => 'YES',
   'CURRENT_PROJECT_VERSION' => '1',
-  'MARKETING_VERSION' => '0.1',
+  'MARKETING_VERSION' => '0.38',
   'DEVELOPMENT_TEAM' => '',
   'CODE_SIGN_STYLE' => 'Automatic',
   # Leave CODE_SIGN_IDENTITY unset so automatic signing can pick the
@@ -425,6 +425,63 @@ mcp_automerge_build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
 mcp_automerge_build_file.product_ref = mcp_automerge_product
 mcp_target.frameworks_build_phase.files << mcp_automerge_build_file
 
+# ---- CLI target (macOS CLI binary, todokase) ----
+# A keyboard-first companion CLI (add / list / next) that operates on the
+# same `tasks.automerge` the app uses. Shares the app's data-layer sources
+# plus the MCP server's TodarchyDoc + file-path discovery — same
+# source-sharing approach as the MCP target, no separate core package.
+cli_target = project.new_target(:command_line_tool, 'todokase', :osx, '14.0', nil, :swift)
+cli_target.product_name = 'todokase'
+
+cli_dir = File.join(ROOT, 'todokase-cli')
+cli_group = project.new_group('todokase-cli', 'todokase-cli')
+Dir.entries(cli_dir).sort.each do |entry|
+  next unless entry.end_with?('.swift')
+  fr = cli_group.new_file(entry)
+  cli_target.source_build_phase.add_file_reference(fr)
+end
+
+# Same data-layer subset the MCP target compiles.
+MCP_SHARED_SOURCES.each do |src_name|
+  src_path = File.join(APP_DIR, src_name)
+  next unless File.exist?(src_path)
+  file_ref = project.main_group.new_file(src_path)
+  cli_target.source_build_phase.add_file_reference(file_ref)
+end
+# Reuse the MCP server's document wrapper + default-path discovery so the
+# CLI reads/writes the exact same file the MCP server does.
+['TodarchyDoc.swift', 'MCPConfig.swift'].each do |src_name|
+  src_path = File.join(mcp_dir, src_name)
+  next unless File.exist?(src_path)
+  file_ref = project.main_group.new_file(src_path)
+  cli_target.source_build_phase.add_file_reference(file_ref)
+end
+
+cli_common = common.dup
+cli_common['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.todarchy.cli'
+cli_common['PRODUCT_NAME'] = 'todokase'
+cli_common['SUPPORTED_PLATFORMS'] = 'macosx'
+cli_common['SDKROOT'] = 'macosx'
+cli_common.delete('TARGETED_DEVICE_FAMILY')
+cli_common.delete('IPHONEOS_DEPLOYMENT_TARGET')
+cli_common.delete('SUPPORTS_MACCATALYST')
+cli_common.delete('SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD')
+cli_common.delete('CODE_SIGN_IDENTITY[sdk=iphoneos*]')
+cli_common.delete('ASSETCATALOG_COMPILER_APPICON_NAME')
+cli_common.delete('ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME')
+cli_target.build_configurations.each do |config|
+  config.build_settings.merge!(cli_common)
+end
+
+# Link Automerge into the CLI target — same package reference as the app/MCP.
+cli_automerge_product = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+cli_automerge_product.package = automerge_ref
+cli_automerge_product.product_name = 'Automerge'
+cli_target.package_product_dependencies << cli_automerge_product
+cli_automerge_build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
+cli_automerge_build_file.product_ref = cli_automerge_product
+cli_target.frameworks_build_phase.files << cli_automerge_build_file
+
 # Save scheme that includes tests
 project.save
 
@@ -442,5 +499,12 @@ mcp_scheme = Xcodeproj::XCScheme.new
 mcp_scheme.add_build_target(mcp_target)
 mcp_scheme.set_launch_target(mcp_target)
 mcp_scheme.save_as(PROJECT_PATH, 'todarchy-mcp', true)
+
+# Dedicated scheme for the CLI, so `xcodebuild -scheme todokase build`
+# resolves the Automerge package dependency before linking.
+cli_scheme = Xcodeproj::XCScheme.new
+cli_scheme.add_build_target(cli_target)
+cli_scheme.set_launch_target(cli_target)
+cli_scheme.save_as(PROJECT_PATH, 'todokase', true)
 
 puts "Project generated at #{PROJECT_PATH}"
