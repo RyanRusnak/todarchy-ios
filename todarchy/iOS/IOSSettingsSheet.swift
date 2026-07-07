@@ -27,11 +27,8 @@ struct IOSSettingsSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    syncSection
-                    diagnosticsSection
-                    themeSection
-                    aboutSection
+                VStack(spacing: 20) {
+                    menuCard
                 }
                 .padding(20)
             }
@@ -77,12 +74,138 @@ struct IOSSettingsSheet: View {
         }
     }
 
+    // MARK: - Top-level menu
+
+    private var menuCard: some View {
+        VStack(spacing: 0) {
+            NavigationLink { syncPage } label: {
+                menuRowLabel(icon: "arrow.triangle.2.circlepath",
+                             title: "Sync & Sharing", subtitle: syncSummary)
+            }
+            .buttonStyle(.plain)
+            rowDivider
+            NavigationLink { encryptionPage } label: {
+                menuRowLabel(icon: "lock.fill",
+                             title: "Encryption", subtitle: passphraseStatusText)
+            }
+            .buttonStyle(.plain)
+            rowDivider
+            NavigationLink { appearancePage } label: {
+                menuRowLabel(icon: "paintpalette.fill",
+                             title: "Appearance", subtitle: currentThemeLabel)
+            }
+            .buttonStyle(.plain)
+            rowDivider
+            NavigationLink { diagnosticsPage } label: {
+                menuRowLabel(icon: "stethoscope",
+                             title: "Diagnostics", subtitle: "Sync log & status")
+            }
+            .buttonStyle(.plain)
+            rowDivider
+            NavigationLink { aboutPage } label: {
+                menuRowLabel(icon: "info.circle",
+                             title: "About", subtitle: nil)
+            }
+            .buttonStyle(.plain)
+        }
+        .background(Theme.bgElev)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+    }
+
+    private func menuRowLabel(icon: String, title: String, subtitle: String?) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(Typo.mono(15, weight: .medium))
+                    .foregroundStyle(Theme.fg)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(Typo.mono(11))
+                        .foregroundStyle(Theme.fgMute)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.fgFaint)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .contentShape(Rectangle())
+    }
+
+    private var rowDivider: some View {
+        Rectangle()
+            .fill(Theme.border)
+            .frame(height: 1)
+            .padding(.leading, 56)
+    }
+
+    // MARK: - Sub-pages
+
+    private var syncPage: some View {
+        settingsPage(title: "Sync & Sharing") { syncSection }
+    }
+
+    private var encryptionPage: some View {
+        settingsPage(title: "Encryption") { passphraseSection }
+    }
+
+    private var appearancePage: some View {
+        settingsPage(title: "Appearance") { themeSection }
+    }
+
+    private var diagnosticsPage: some View {
+        settingsPage(title: "Diagnostics") { diagnosticsSection }
+    }
+
+    private var aboutPage: some View {
+        settingsPage(title: "About") { aboutSection }
+    }
+
+    private func settingsPage<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                content()
+            }
+            .padding(20)
+        }
+        .background(Theme.bg)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var syncSummary: String {
+        switch settings.mode.kind {
+        case .localOnly: return "Off · this device only"
+        case .folder: return settings.syncFolderURL == nil ? "Folder (not set)" : "Folder sync"
+        case .server: return "Server"
+        }
+    }
+
+    private var currentThemeLabel: String {
+        switch themeName {
+        case "tokyoNight": return "Tokyo Night"
+        case "catppuccin": return "Catppuccin"
+        case "gruvbox": return "Gruvbox"
+        case "ubuntu": return "Ubuntu"
+        default: return themeName
+        }
+    }
+
     // MARK: - Sections
 
     private var syncSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("SYNC")
-
             Picker("Sync via", selection: $stagedKind) {
                 Text("Off").tag(SyncMode.Kind.localOnly)
                 Text("Folder").tag(SyncMode.Kind.folder)
@@ -106,7 +229,6 @@ struct IOSSettingsSheet: View {
             case .localOnly: EmptyView()
             }
 
-            passphraseSection
             SyncExplanation()
         }
     }
@@ -116,8 +238,6 @@ struct IOSSettingsSheet: View {
     @ViewBuilder
     private var passphraseSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("PASSPHRASE")
-                .padding(.top, 4)
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
                     Image(systemName: passphraseStatusIcon)
@@ -333,7 +453,6 @@ struct IOSSettingsSheet: View {
 
     private var themeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("THEME")
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                 ForEach(ThemePalette.allPalettes, id: \.id) { palette in
                     themeChip(palette)
@@ -398,7 +517,6 @@ struct IOSSettingsSheet: View {
 
     private var diagnosticsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("DIAGNOSTICS")
             SyncDiagnosticsView()
                 .frame(minHeight: 420)
                 .background(Theme.bgElev)
@@ -409,7 +527,6 @@ struct IOSSettingsSheet: View {
 
     private var aboutSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("ABOUT")
             VStack(alignment: .leading, spacing: 4) {
                 Text("todarchy")
                     .font(Typo.mono(16, weight: .semibold))
@@ -428,13 +545,6 @@ struct IOSSettingsSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
         }
-    }
-
-    private func sectionHeader(_ text: String) -> some View {
-        Text(text)
-            .font(Typo.mono(10, weight: .semibold))
-            .tracking(0.8)
-            .foregroundStyle(Theme.fgMute)
     }
 
     // MARK: - Helpers
