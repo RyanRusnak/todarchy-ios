@@ -9,6 +9,10 @@ struct ListSwitcherSheet: View {
     @ObservedObject var syncSettings = SyncSettings.shared
     @State private var search = ""
     @State private var pendingNameProjectId: String?
+    /// True when the pending name edit is for a freshly-created project (so an
+    /// empty commit deletes the blank shell). False when renaming an existing
+    /// project (an empty commit just cancels, keeping the original name).
+    @State private var pendingNameIsNew: Bool = false
     @State private var nameBuffer: String = ""
     @FocusState private var nameFieldFocused: Bool
     /// Transient banner at the top of the sheet for share outcomes.
@@ -188,23 +192,37 @@ struct ListSwitcherSheet: View {
     private func beginNewProject() {
         let id = store.addProject(name: "")
         nameBuffer = ""
+        pendingNameIsNew = true
         pendingNameProjectId = id
         // Focus on the next runloop so the field is in the hierarchy first.
+        DispatchQueue.main.async { nameFieldFocused = true }
+    }
+
+    private func beginRename(_ list: ProjectItem) {
+        nameBuffer = list.name
+        pendingNameIsNew = false
+        pendingNameProjectId = list.id
         DispatchQueue.main.async { nameFieldFocused = true }
     }
 
     private func commitPendingName(_ id: String) {
         let trimmed = nameBuffer.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty {
-            // Abandoned — remove the blank shell so we don't leak
-            // nameless projects.
-            store.deleteProject(id: id)
+            // A blank new project is an abandoned shell — remove it so we
+            // don't leak nameless projects. A blank rename of an existing
+            // project just cancels, leaving the original name intact.
+            if pendingNameIsNew {
+                store.deleteProject(id: id)
+            }
         } else {
             store.renameProject(id: id, to: trimmed)
-            store.activeSelection = .list(id)
-            store.activeContextFilter = nil
+            if pendingNameIsNew {
+                store.activeSelection = .list(id)
+                store.activeContextFilter = nil
+            }
         }
         pendingNameProjectId = nil
+        pendingNameIsNew = false
         nameBuffer = ""
         nameFieldFocused = false
         onClose()
@@ -271,9 +289,14 @@ struct ListSwitcherSheet: View {
                       systemImage: list.claudeAccess ? "sparkles.slash" : "sparkles")
             }
             if list.isInbox {
-                // Inbox can't be shared/deleted — Claude toggle above
-                // is the only menu item here.
+                // Inbox can't be renamed/shared/deleted — Claude toggle
+                // above is the only menu item here.
             } else if list.isShared {
+                Button {
+                    beginRename(list)
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
                 Button {
                     handleShareTap(list)
                 } label: {
@@ -285,6 +308,11 @@ struct ListSwitcherSheet: View {
                     Label("Leave shared project", systemImage: "person.crop.circle.badge.xmark")
                 }
             } else {
+                Button {
+                    beginRename(list)
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
                 Button {
                     handleShareTap(list)
                 } label: {

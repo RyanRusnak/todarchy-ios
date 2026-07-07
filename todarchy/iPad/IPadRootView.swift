@@ -44,6 +44,9 @@ struct IPadRootView: View {
 private struct IPadSidebar: View {
     @EnvironmentObject var store: TaskStore
     let onOpenSettings: () -> Void
+    /// Project being renamed via the rename alert; nil dismisses it.
+    @State private var renameTarget: ProjectItem?
+    @State private var renameText: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -79,6 +82,26 @@ private struct IPadSidebar: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(Theme.bgElev)
         .toolbar(.hidden, for: .navigationBar)
+        .alert(
+            "Rename project",
+            isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            ),
+            presenting: renameTarget
+        ) { project in
+            TextField("Project name", text: $renameText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Rename") {
+                let trimmed = renameText.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty {
+                    store.renameProject(id: project.id, to: trimmed)
+                }
+                renameTarget = nil
+            }
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+        }
     }
 
     private var settingsButton: some View {
@@ -151,6 +174,16 @@ private struct IPadSidebar: View {
         .onTapGesture {
             store.activeSelection = .list(list.id)
             store.activeContextFilter = nil
+        }
+        .contextMenu {
+            if !list.isInbox {
+                Button {
+                    renameText = list.name
+                    renameTarget = list
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+            }
         }
     }
 
