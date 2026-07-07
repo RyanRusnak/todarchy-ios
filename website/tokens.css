@@ -1,0 +1,159 @@
+/* todokase design tokens — extracted verbatim from the app.
+ * Colors: todarchy/Theme.swift (ThemePalette). Type: todarchy/Theme.swift (Typo) + design handoff.
+ * Default palette is Tokyo Night. Switch with <html data-theme="catppuccin|gruvbox|ubuntu">.
+ */
+
+/* ---- Fonts (JetBrains Mono, shipped in ./fonts) ---- */
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./fonts/JetBrainsMono-Regular.ttf") format("truetype");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./fonts/JetBrainsMono-Medium.ttf") format("truetype");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./fonts/JetBrainsMono-SemiBold.ttf") format("truetype");
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./fonts/JetBrainsMono-Bold.ttf") format("truetype");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+
+:root {
+  /* Type — mono everywhere, matching the app */
+  --font: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --fs-base: 14px;      /* app body size */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 14px;
+  --fs-lg: 18px;
+  --fs-xl: 24px;
+  --fs-2xl: 34px;
+  --fs-3xl: 48px;       /* hero */
+  --lh: 1.5;
+  --tracking: 0;        /* mono needs no letter-spacing */
+
+  /* Shape — 2px borders / 10px radii are the app's signature */
+  --border-w: 2px;      /* 1pt native on retina; 2px on web */
+  --radius: 10px;       /* cards / panels */
+  --radius-sm: 8px;     /* buttons / chips */
+  --radius-xs: 4px;     /* tags / pills */
+
+  /* Spacing scale (4px base) */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-6: 24px; --sp-8: 32px; --sp-12: 48px; --sp-16: 64px;
+
+  /* Elevation (from handoff --shadow) */
+  --shadow: 0 30px 80px rgba(0,0,0,.55), 0 4px 14px rgba(0,0,0,.35);
+}
+
+/* ---- Tokyo Night (default) ---- */
+:root, [data-theme="tokyoNight"] {
+  --bg:        #1A1B26;
+  --bg-elev:   #16171F;
+  --bg-soft:   #1F2030;
+  --panel:     #1F2335;
+  --border:    #2A2E42;
+  --border-hi: #3B4261;
+  --fg:        #C0CAF5;
+  --fg-dim:    #9AA5CE;
+  --fg-mute:   #565F89;
+  --fg-faint:  #3B4261;
+  --accent:    #7AA2F7;
+  --accent2:   #BB9AF7;
+  --success:   #9ECE6A;
+  --warn:      #E0AF68;
+  --danger:    #F7768E;
+  --cyan:      #7DCFFF;
+  --orange:    #FF9E64;
+  --blue:      #7AA2F7;
+  --purple:    #BB9AF7;
+}
+
+/* ---- Catppuccin ---- */
+[data-theme="catppuccin"] {
+  --bg:        #1E1E2E;
+  --bg-elev:   #181825;
+  --bg-soft:   #242437;
+  --panel:     #282838;
+  --border:    #313244;
+  --border-hi: #45475A;
+  --fg:        #CDD6F4;
+  --fg-dim:    #BAC2DE;
+  --fg-mute:   #6C7086;
+  --fg-faint:  #45475A;
+  --accent:    #89B4FA;
+  --accent2:   #CBA6F7;
+  --success:   #A6E3A1;
+  --warn:      #F9E2AF;
+  --danger:    #F38BA8;
+  --cyan:      #89DCEB;
+  --orange:    #FAB387;
+  --blue:      #89B4FA;
+  --purple:    #CBA6F7;
+}
+
+/* ---- Gruvbox ---- */
+[data-theme="gruvbox"] {
+  --bg:        #1D2021;
+  --bg-elev:   #282828;
+  --bg-soft:   #32302F;
+  --panel:     #3C3836;
+  --border:    #504945;
+  --border-hi: #665C54;
+  --fg:        #EBDBB2;
+  --fg-dim:    #D5C4A1;
+  --fg-mute:   #928374;
+  --fg-faint:  #504945;
+  --accent:    #FABD2F;
+  --accent2:   #D3869B;
+  --success:   #B8BB26;
+  --warn:      #FABD2F;
+  --danger:    #FB4934;
+  --cyan:      #83A598;
+  --orange:    #FE8019;
+  --blue:      #83A598;
+  --purple:    #D3869B;
+}
+
+/* ---- Ubuntu ---- */
+[data-theme="ubuntu"] {
+  --bg:        #0A0A0F;
+  --bg-elev:   #14141C;
+  --bg-soft:   #1C1C26;
+  --panel:     #22222E;
+  --border:    #26262F;
+  --border-hi: #34343F;
+  --fg:        #ECEAEA;
+  --fg-dim:    #D9D9D9;
+  --fg-mute:   #AEA79F;
+  --fg-faint:  #6B5B6B;
+  --accent:    #E95420;
+  --accent2:   #DD4814;
+  --success:   #A6D98E;
+  --warn:      #F9C784;
+  --danger:    #EF6C6C;
+  --cyan:      #9CD3E3;
+  --orange:    #E95420;
+  --blue:      #7AA2F7;
+  --purple:    #BB9AF7;
+}
+
+/* ---- Base reset a marketing page can build on ---- */
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: var(--fs-base);
+  line-height: var(--lh);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); }

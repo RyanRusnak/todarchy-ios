@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en" data-theme="tokyoNight">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>todokase — keyboard-first todos</title>
+  <meta name="description" content="A free, keyboard-first todo app for iOS, iPadOS, and macOS. Fast, minimal, themeable, end-to-end encrypted.">
+  <link rel="icon" href="./icon-512.png">
+  <meta property="og:title" content="todokase">
+  <meta property="og:description" content="A free, keyboard-first todo app for iOS, iPadOS, and macOS.">
+  <meta property="og:image" content="./icon-1024.png">
+  <link rel="stylesheet" href="./tokens.css">
+  <style>
+    /* Starter styling only — replace with the real site. Uses tokens.css vars. */
+    .wrap { max-width: 880px; margin: 0 auto; padding: var(--sp-16) var(--sp-4); }
+    header { display: flex; align-items: center; gap: var(--sp-3); }
+    header img { width: 56px; height: 56px; border-radius: var(--radius); }
+    h1 { font-size: var(--fs-2xl); font-weight: 700; margin: 0; }
+    .pitch { font-size: var(--fs-lg); color: var(--fg-dim); margin: var(--sp-6) 0; }
+    .badge {
+      display: inline-block; padding: var(--sp-2) var(--sp-4);
+      border: var(--border-w) solid var(--accent); border-radius: var(--radius-sm);
+      color: var(--accent); text-decoration: none; font-weight: 600;
+    }
+    .card {
+      margin-top: var(--sp-12); padding: var(--sp-6);
+      background: var(--panel); border: var(--border-w) solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow);
+    }
+    .row { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) 0; }
+    .check { width: 16px; height: 16px; border: var(--border-w) solid var(--fg-mute); border-radius: var(--radius-xs); }
+    .check.done { background: var(--success); border-color: var(--success); }
+    .task.done { color: var(--fg-mute); text-decoration: line-through; }
+    .chip { font-size: var(--fs-xs); padding: 2px var(--sp-2); border-radius: var(--radius-xs); }
+    .chip.today { color: var(--danger); border: 1px solid var(--danger); }
+    .chip.tomorrow { color: var(--warn); border: 1px solid var(--warn); }
+    .chip.week { color: var(--accent); border: 1px solid var(--accent); }
+    .ctx { color: var(--accent2); font-size: var(--fs-sm); }
+    .term {
+      margin-top: var(--sp-6); padding: var(--sp-4);
+      background: var(--bg-elev); border: var(--border-w) solid var(--border);
+      border-radius: var(--radius); font-size: var(--fs-sm);
+      color: var(--fg-dim); overflow-x: auto; line-height: 1.7;
+    }
+    .term .p { color: var(--success); }
+    .term .c { color: var(--fg); }
+    .term .o { color: var(--fg-mute); }
+    .themes { margin-top: var(--sp-8); display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+    .themes button {
+      font-family: var(--font); font-size: var(--fs-sm); cursor: pointer;
+      background: var(--bg-soft); color: var(--fg-dim);
+      border: var(--border-w) solid var(--border); border-radius: var(--radius-sm);
+      padding: var(--sp-2) var(--sp-3);
+    }
+    footer { margin-top: var(--sp-16); color: var(--fg-mute); font-size: var(--fs-sm); }
+    footer a { color: var(--fg-dim); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <img src="./icon-512.png" alt="todokase icon">
+      <h1>todokase</h1>
+    </header>
+
+    <p class="pitch">a free, keyboard-first todo app for iOS, iPadOS &amp; macOS.<br>
+      fast. minimal. themeable. end-to-end encrypted. add tasks from your terminal.</p>
+    <a class="badge" href="#">get it on testflight →</a>
+
+    <!-- Demo of the app's list language, built purely from tokens.css -->
+    <div class="card">
+      <div class="row"><span class="check done"></span><span class="task done">ship 0.38 to testflight</span></div>
+      <div class="row"><span class="check"></span><span class="task">write the marketing site</span> <span class="chip today">today</span></div>
+      <div class="row"><span class="check"></span><span class="task">record a demo gif</span> <span class="chip tomorrow">tomorrow</span> <span class="ctx">@mac</span></div>
+      <div class="row"><span class="check"></span><span class="task">draft launch post</span> <span class="chip week">this week</span> <span class="ctx">@work</span></div>
+    </div>
+
+    <!-- Capture from the terminal, too (macOS companion CLI) -->
+    <div class="term">
+      <div><span class="p">$</span> <span class="c">todokase add "email alice @work !today"</span></div>
+      <div class="o">added  email alice  →  inbox  !today  @work</div>
+      <div><span class="p">$</span> <span class="c">todokase next</span></div>
+      <div class="o">email alice  !today  @work  (inbox)</div>
+    </div>
+
+    <div class="themes">
+      <span style="color:var(--fg-mute);font-size:var(--fs-sm);align-self:center">theme:</span>
+      <button onclick="setTheme('tokyoNight')">tokyo night</button>
+      <button onclick="setTheme('catppuccin')">catppuccin</button>
+      <button onclick="setTheme('gruvbox')">gruvbox</button>
+      <button onclick="setTheme('ubuntu')">ubuntu</button>
+    </div>
+
+    <footer>
+      iOS · iPadOS · macOS &nbsp;·&nbsp; <a href="https://github.com/RyanRusnak/todarchy-ios">github</a>
+      &nbsp;·&nbsp; end-to-end encrypted sharing
+    </footer>
+  </div>
+
+  <script>
+    function setTheme(t){ document.documentElement.setAttribute('data-theme', t); }
+  </script>
+</body>
+</html>
