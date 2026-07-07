@@ -4,6 +4,8 @@
 # Xcode — per-user state, build products
 build/
 DerivedData/
+# Packaged release artifacts (todokase CLI tarballs)
+dist/
 *.xcuserstate
 xcuserdata/
 *.xcscmblueprint
