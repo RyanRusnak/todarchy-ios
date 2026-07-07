@@ -25,7 +25,7 @@ struct MenuBarExtraView: View {
 
     private var header: some View {
         HStack {
-            Text("todarchy")
+            Text("todokase")
                 .font(Typo.mono(13, weight: .semibold))
                 .foregroundStyle(Theme.fg)
             Text("today + inbox")
@@ -43,7 +43,7 @@ struct MenuBarExtraView: View {
                     .foregroundStyle(Theme.accent)
             }
             .buttonStyle(.plain)
-            .help("Open todarchy")
+            .help("Open todokase")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

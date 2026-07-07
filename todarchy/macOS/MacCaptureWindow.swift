@@ -138,7 +138,7 @@ struct SettingsView: View {
 
     private var aboutView: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("todarchy")
+            Text("todokase")
                 .font(Typo.mono(18, weight: .semibold))
                 .foregroundStyle(Theme.fg)
             Text("Theme: \(ThemePalette.current.id)")

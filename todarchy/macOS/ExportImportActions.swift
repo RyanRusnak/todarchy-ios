@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 enum ExportImportActions {
     static func exportJSON(store: TaskStore) {
         let panel = NSSavePanel()
-        panel.title = "Export todarchy tasks"
+        panel.title = "Export todokase tasks"
         panel.nameFieldStringValue = "todarchy-\(isoDay()).todarchy"
         panel.allowedContentTypes = [UTType.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -35,7 +35,7 @@ enum ExportImportActions {
 
     static func importJSON(store: TaskStore) {
         let panel = NSOpenPanel()
-        panel.title = "Import todarchy tasks"
+        panel.title = "Import todokase tasks"
         panel.allowedContentTypes = [UTType.json]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false

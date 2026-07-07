@@ -51,7 +51,7 @@ private struct IPadSidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("todarchy")
+                Text("todokase")
                     .font(Typo.mono(18, weight: .semibold))
                     .foregroundStyle(Theme.fg)
                 Text("~/tasks · matt")

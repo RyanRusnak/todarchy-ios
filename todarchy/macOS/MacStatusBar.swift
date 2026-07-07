@@ -33,7 +33,7 @@ struct MacStatusBar: View {
             divider
             syncIndicator
             divider
-            Text("todarchy")
+            Text("todokase")
                 .font(Typo.mono(11))
                 .foregroundStyle(Theme.fgFaint)
         }

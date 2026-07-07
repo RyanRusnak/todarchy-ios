@@ -528,7 +528,7 @@ struct IOSSettingsSheet: View {
     private var aboutSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("todarchy")
+                Text("todokase")
                     .font(Typo.mono(16, weight: .semibold))
                     .foregroundStyle(Theme.fg)
                 Text("font: JetBrains Mono")

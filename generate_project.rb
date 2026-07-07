@@ -20,16 +20,19 @@ FileUtils.rm_rf(PROJECT_PATH) if File.directory?(PROJECT_PATH)
 def write_info_plist(path)
   plist = {
     'CFBundleDevelopmentRegion'       => '$(DEVELOPMENT_LANGUAGE)',
-    'CFBundleDisplayName'             => 'todarchy',
+    'CFBundleDisplayName'             => 'todokase',
     'CFBundleExecutable'              => '$(EXECUTABLE_NAME)',
     'CFBundleIdentifier'              => '$(PRODUCT_BUNDLE_IDENTIFIER)',
     'CFBundleInfoDictionaryVersion'   => '6.0',
-    'CFBundleName'                    => '$(PRODUCT_NAME)',
+    # Pinned literal (not $(PRODUCT_NAME)) so the display name is decoupled
+    # from the internal target/product name, which stays "todarchy". This is
+    # the name macOS shows in the app menu ("About todokase / Quit todokase").
+    'CFBundleName'                    => 'todokase',
     'CFBundlePackageType'             => '$(PRODUCT_BUNDLE_PACKAGE_TYPE)',
     'CFBundleShortVersionString'      => '$(MARKETING_VERSION)',
     'CFBundleVersion'                 => '$(CURRENT_PROJECT_VERSION)',
     'LSApplicationCategoryType'       => 'public.app-category.productivity',
-    'NSHumanReadableCopyright'        => 'Copyright 2026 todarchy',
+    'NSHumanReadableCopyright'        => 'Copyright 2026 todokase',
     # Export compliance: app uses only standard Apple-framework crypto
     # (HTTPS, Speech). Declaring `false` skips the App Store Connect
     # export-compliance form on every TestFlight upload.
@@ -37,8 +40,8 @@ def write_info_plist(path)
     'NSMainStoryboardFile'            => '',
     'NSPrincipalClass'                => 'NSApplication',
     # Voice task capture (Apple Speech framework, on-device).
-    'NSMicrophoneUsageDescription'    => 'todarchy uses the microphone so you can add tasks by speaking.',
-    'NSSpeechRecognitionUsageDescription' => 'todarchy transcribes your voice on-device to turn it into a task. Audio never leaves your device.',
+    'NSMicrophoneUsageDescription'    => 'todokase uses the microphone so you can add tasks by speaking.',
+    'NSSpeechRecognitionUsageDescription' => 'todokase transcribes your voice on-device to turn it into a task. Audio never leaves your device.',
     # UI orientation + appearance.
     'UIStatusBarStyle'                => 'UIStatusBarStyleLightContent',
     'UIUserInterfaceStyle'            => 'Dark',
