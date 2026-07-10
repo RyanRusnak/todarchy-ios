@@ -53,11 +53,18 @@ struct ThemePalette: Equatable {
         case ThemePalette.catppuccin.id: return .catppuccin
         case ThemePalette.gruvbox.id: return .gruvbox
         case ThemePalette.ubuntu.id: return .ubuntu
+        case ThemePalette.osakaJade.id: return .osakaJade
+        case ThemePalette.catppuccinLatte.id: return .catppuccinLatte
+        case ThemePalette.pulsar.id: return .pulsar
+        case ThemePalette.archwave.id: return .archwave
         default: return .tokyoNight
         }
     }
 
-    static let allPalettes: [ThemePalette] = [.tokyoNight, .catppuccin, .gruvbox, .ubuntu]
+    static let allPalettes: [ThemePalette] = [
+        .tokyoNight, .catppuccin, .gruvbox, .ubuntu,
+        .osakaJade, .catppuccinLatte, .pulsar, .archwave,
+    ]
 }
 
 // MARK: - Built-in palettes
@@ -153,6 +160,102 @@ extension ThemePalette {
         blue: Color(hex: 0x7AA2F7),
         purple: Color(hex: 0xBB9AF7),
         id: "ubuntu"
+    )
+
+    // Colors sourced from the upstream Omarchy theme palettes
+    // (basecamp/omarchy + community repos); backgrounds/greys derived to
+    // fit todokase's bg/panel/border layering.
+    static let osakaJade = ThemePalette(
+        bg: Color(hex: 0x111C18),
+        bgElev: Color(hex: 0x0D1712),
+        bgSoft: Color(hex: 0x18251F),
+        panel: Color(hex: 0x1B2A23),
+        border: Color(hex: 0x23372B),
+        borderHi: Color(hex: 0x53685B),
+        fg: Color(hex: 0xC1C497),
+        fgDim: Color(hex: 0xA7AA84),
+        fgMute: Color(hex: 0x6E8377),
+        fgFaint: Color(hex: 0x3E5046),
+        accent: Color(hex: 0x509475),
+        accent2: Color(hex: 0x75BBB3),
+        success: Color(hex: 0x63B07A),
+        warn: Color(hex: 0xE5C736),
+        danger: Color(hex: 0xFF5345),
+        cyan: Color(hex: 0x2DD5B7),
+        orange: Color(hex: 0xDB9F9C),
+        blue: Color(hex: 0x509475),
+        purple: Color(hex: 0xD2689C),
+        id: "osakaJade"
+    )
+
+    // Catppuccin Latte — the light theme. Standard Latte palette.
+    static let catppuccinLatte = ThemePalette(
+        bg: Color(hex: 0xEFF1F5),
+        bgElev: Color(hex: 0xE6E9EF),
+        bgSoft: Color(hex: 0xDCE0E8),
+        panel: Color(hex: 0xE6E9EF),
+        border: Color(hex: 0xCCD0DA),
+        borderHi: Color(hex: 0xBCC0CC),
+        fg: Color(hex: 0x4C4F69),
+        fgDim: Color(hex: 0x5C5F77),
+        fgMute: Color(hex: 0x6C6F85),
+        fgFaint: Color(hex: 0x9CA0B0),
+        accent: Color(hex: 0x1E66F5),
+        accent2: Color(hex: 0x8839EF),
+        success: Color(hex: 0x40A02B),
+        warn: Color(hex: 0xDF8E1D),
+        danger: Color(hex: 0xD20F39),
+        cyan: Color(hex: 0x179299),
+        orange: Color(hex: 0xFE640B),
+        blue: Color(hex: 0x1E66F5),
+        purple: Color(hex: 0x8839EF),
+        id: "catppuccinLatte"
+    )
+
+    static let pulsar = ThemePalette(
+        bg: Color(hex: 0x0A0314),
+        bgElev: Color(hex: 0x070210),
+        bgSoft: Color(hex: 0x160A26),
+        panel: Color(hex: 0x1D0F30),
+        border: Color(hex: 0x2E1A47),
+        borderHi: Color(hex: 0x4A2E6B),
+        fg: Color(hex: 0xE0E6FF),
+        fgDim: Color(hex: 0xB8BFE0),
+        fgMute: Color(hex: 0x8F86B5),
+        fgFaint: Color(hex: 0x4E4470),
+        accent: Color(hex: 0xB82AFF),
+        accent2: Color(hex: 0x3298FA),
+        success: Color(hex: 0x70D674),
+        warn: Color(hex: 0xF2E42E),
+        danger: Color(hex: 0xFF5779),
+        cyan: Color(hex: 0x3DF2F2),
+        orange: Color(hex: 0xFF7A59),
+        blue: Color(hex: 0x3298FA),
+        purple: Color(hex: 0xB82AFF),
+        id: "pulsar"
+    )
+
+    static let archwave = ThemePalette(
+        bg: Color(hex: 0x1A0D2E),
+        bgElev: Color(hex: 0x140A24),
+        bgSoft: Color(hex: 0x241640),
+        panel: Color(hex: 0x2D1B4E),
+        border: Color(hex: 0x3A2560),
+        borderHi: Color(hex: 0x543A6E),
+        fg: Color(hex: 0xD4A5FF),
+        fgDim: Color(hex: 0xBE9BE6),
+        fgMute: Color(hex: 0x8A6FB0),
+        fgFaint: Color(hex: 0x543A6E),
+        accent: Color(hex: 0xF4A5FF),
+        accent2: Color(hex: 0x8B9AFF),
+        success: Color(hex: 0x8FFEF4),
+        warn: Color(hex: 0xF9F871),
+        danger: Color(hex: 0xFF6EC7),
+        cyan: Color(hex: 0x5FFBF1),
+        orange: Color(hex: 0xFF9E7A),
+        blue: Color(hex: 0x8B9AFF),
+        purple: Color(hex: 0xF4A5FF),
+        id: "archwave"
     )
 }
 

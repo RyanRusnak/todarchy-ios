@@ -128,6 +128,10 @@ struct MainKeyRouter {
         switch chars {
         case "j": return .selectNext
         case "k": return .selectPrevious
+        // h/l switch projects (vim left/right), mirroring the arrow keys,
+        // so the whole list+task navigation stays on the home row.
+        case "h": return .selectPreviousList
+        case "l": return .selectNextList
         case "J": return .moveSelectedDown
         case "K": return .moveSelectedUp
         case "x", " ": return .toggleComplete

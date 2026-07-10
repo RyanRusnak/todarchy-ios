@@ -453,6 +453,20 @@ final class TaskStore: ObservableObject {
         return comment.id
     }
 
+    /// Remove a comment from a task by id. Comments are otherwise
+    /// append-only; the UI only offers this for comments the current
+    /// device authored (`author == CommentAuthor.current`). Returns true
+    /// if a matching comment was found and removed.
+    @discardableResult
+    func deleteComment(taskId: String, commentId: String) -> Bool {
+        guard let idx = tasks.firstIndex(where: { $0.id == taskId }) else { return false }
+        guard tasks[idx].comments.contains(where: { $0.id == commentId }) else { return false }
+        snapshot()
+        tasks[idx].comments.removeAll { $0.id == commentId }
+        stamp(&tasks[idx])
+        return true
+    }
+
     /// Reserved for future sync-ready fields. Currently a no-op since
     /// Automerge tracks causality implicitly via the doc's actor IDs.
     private func stamp(_ task: inout TaskItem) { _ = task }

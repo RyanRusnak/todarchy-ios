@@ -139,38 +139,14 @@ struct TaskInspectorContent: View {
                 .fixedSize()
             }
             metaRow("due") {
-                Menu {
+                // Inline one-tap chips (not a nested menu) so due is fast to
+                // set/change on an already-created task. Tapping the active
+                // chip again clears it.
+                HStack(spacing: 6) {
                     ForEach(DueBucket.allCases) { bucket in
-                        Button {
-                            store.setDue(task.id, due: bucket)
-                        } label: {
-                            if task.due == bucket {
-                                Label(bucket.label, systemImage: "checkmark")
-                            } else {
-                                Text(bucket.label)
-                            }
-                        }
-                    }
-                    if task.due != nil {
-                        Divider()
-                        Button("clear", role: .destructive) {
-                            store.setDue(task.id, due: nil)
-                        }
-                    }
-                } label: {
-                    if let d = task.due {
-                        DueChip(due: d)
-                    } else {
-                        Text("none  ▾")
-                            .font(Typo.mono(12))
-                            .foregroundStyle(Theme.fgMute)
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.border, lineWidth: 1))
+                        dueChip(bucket, task: task)
                     }
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
             }
             if let d = task.deferUntil, d > Date() {
                 metaRow("deferred") {
@@ -277,6 +253,26 @@ struct TaskInspectorContent: View {
         }
     }
 
+    private func dueChip(_ bucket: DueBucket, task: TaskItem) -> some View {
+        let selected = task.due == bucket
+        return Button {
+            store.setDue(task.id, due: selected ? nil : bucket)
+        } label: {
+            Text(bucket.label)
+                .font(Typo.mono(11, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected ? bucket.color : Theme.fgMute)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background((selected ? bucket.color : Color.clear).opacity(selected ? 0.14 : 0))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(selected ? bucket.color.opacity(0.5) : Theme.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Comments
 
     private var commentsSection: some View {
@@ -319,6 +315,18 @@ struct TaskInspectorContent: View {
                 Text(TimeAgo.short(c.createdAt))
                     .font(Typo.mono(10))
                     .foregroundStyle(Theme.fgFaint)
+                if c.author == CommentAuthor.current {
+                    Spacer()
+                    Button {
+                        store.deleteComment(taskId: task.id, commentId: c.id)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.fgFaint)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete comment")
+                }
             }
             Text(c.text)
                 .font(Typo.mono(12))

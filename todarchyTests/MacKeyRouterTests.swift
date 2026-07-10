@@ -30,6 +30,16 @@ final class MacKeyRouterTests: XCTestCase {
         XCTAssertEqual(router.route(chars: "k", keyCode: 0), .selectPrevious)
     }
 
+    func testHSwitchesToPreviousList() {
+        var router = MainKeyRouter()
+        XCTAssertEqual(router.route(chars: "h", keyCode: 0), .selectPreviousList)
+    }
+
+    func testLSwitchesToNextList() {
+        var router = MainKeyRouter()
+        XCTAssertEqual(router.route(chars: "l", keyCode: 0), .selectNextList)
+    }
+
     func testXTogglesComplete() {
         var router = MainKeyRouter()
         XCTAssertEqual(router.route(chars: "x", keyCode: 0), .toggleComplete)

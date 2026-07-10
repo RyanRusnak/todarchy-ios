@@ -598,6 +598,11 @@ struct TaskDetailSheet: View {
 
     @State private var title = ""
     @State private var note = ""
+    /// Explicit edit toggle for the body, decoupled from focus. Tapping the
+    /// rendered preview sets this true (the old code keyed the editor's
+    /// visibility off `noteFocused` alone, so once a body was set you could
+    /// never get focus back into it).
+    @State private var editingNote = false
     @State private var commentDraft = ""
     @FocusState private var commentFocused: Bool
     @FocusState private var noteFocused: Bool
@@ -633,6 +638,7 @@ struct TaskDetailSheet: View {
             }
         }
         .onChange(of: store.selectedTaskId) { _, _ in
+            editingNote = false
             if let t = selectedTask {
                 title = t.title
                 note = t.note
@@ -688,7 +694,7 @@ struct TaskDetailSheet: View {
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(task.comments) { c in
-                        commentRow(c)
+                        commentRow(c, taskId: task.id)
                     }
                 }
             }
@@ -697,7 +703,7 @@ struct TaskDetailSheet: View {
         }
     }
 
-    private func commentRow(_ c: Comment) -> some View {
+    private func commentRow(_ c: Comment, taskId: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(c.author)
@@ -706,6 +712,18 @@ struct TaskDetailSheet: View {
                 Text(TimeAgo.short(c.createdAt))
                     .font(Typo.mono(10))
                     .foregroundStyle(Theme.fgFaint)
+                if c.author == CommentAuthor.current {
+                    Spacer()
+                    Button {
+                        store.deleteComment(taskId: taskId, commentId: c.id)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.fgFaint)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Delete comment")
+                }
             }
             Text(c.text)
                 .font(Typo.mono(13))
@@ -750,6 +768,26 @@ struct TaskDetailSheet: View {
         !commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private func dueChip(_ bucket: DueBucket, task: TaskItem) -> some View {
+        let selected = task.due == bucket
+        return Button {
+            store.setDue(task.id, due: selected ? nil : bucket)
+        } label: {
+            Text(bucket.label)
+                .font(Typo.mono(12, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected ? bucket.color : Theme.fgMute)
+                .padding(.horizontal, 9).padding(.vertical, 5)
+                .background((selected ? bucket.color : Color.clear).opacity(selected ? 0.16 : 0))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(selected ? bucket.color.opacity(0.5) : Theme.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private func noteEditor(task: TaskItem) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("BODY")
@@ -760,7 +798,7 @@ struct TaskDetailSheet: View {
             // see the rendered preview. Keeps the source visible
             // while typing (so the user can edit the markdown) and
             // shows formatting otherwise (so it reads naturally).
-            if noteFocused || note.isEmpty {
+            if editingNote || note.isEmpty {
                 TextEditor(text: $note)
                     .focused($noteFocused)
                     .font(Typo.mono(13))
@@ -773,6 +811,11 @@ struct TaskDetailSheet: View {
                         RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1)
                     )
                     .onChange(of: note) { _, v in store.setNote(task.id, note: v) }
+                    .onChange(of: noteFocused) { _, focused in
+                        // Leaving the field returns to the rendered preview
+                        // (unless it's empty, which keeps the editor up).
+                        if !focused { editingNote = false }
+                    }
             } else {
                 MarkdownText(raw: note)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -782,8 +825,13 @@ struct TaskDetailSheet: View {
                         RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1)
                     )
                     .contentShape(Rectangle())
-                    .onTapGesture { noteFocused = true }
+                    .onTapGesture { editingNote = true }
             }
+        }
+        // Focus the editor once it's actually in the hierarchy — requesting
+        // focus in the tap handler (before the TextEditor exists) gets dropped.
+        .onChange(of: editingNote) { _, editing in
+            if editing { DispatchQueue.main.async { noteFocused = true } }
         }
     }
 
@@ -831,14 +879,12 @@ struct TaskDetailSheet: View {
 
             HStack {
                 Text("due").font(Typo.mono(12)).foregroundStyle(Theme.fgMute).frame(width: 70, alignment: .leading)
-                Menu {
-                    Button("none") { store.setDue(task.id, due: nil) }
+                // Inline one-tap chips so due is easy to set/change on an
+                // existing task. Tapping the active chip clears it.
+                HStack(spacing: 6) {
                     ForEach(DueBucket.allCases) { d in
-                        Button(d.label) { store.setDue(task.id, due: d) }
+                        dueChip(d, task: task)
                     }
-                } label: {
-                    if let d = task.due { DueChip(due: d) }
-                    else { Text("none").font(Typo.mono(13)).foregroundStyle(Theme.fgMute) }
                 }
             }
 

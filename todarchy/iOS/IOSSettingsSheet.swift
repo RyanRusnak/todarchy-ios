@@ -198,6 +198,10 @@ struct IOSSettingsSheet: View {
         case "catppuccin": return "Catppuccin"
         case "gruvbox": return "Gruvbox"
         case "ubuntu": return "Ubuntu"
+        case "osakaJade": return "Osaka Jade"
+        case "catppuccinLatte": return "Catppuccin Latte"
+        case "pulsar": return "Pulsar"
+        case "archwave": return "Archwave"
         default: return themeName
         }
     }
@@ -511,6 +515,10 @@ struct IOSSettingsSheet: View {
         case "catppuccin": return "pastel / cozy"
         case "gruvbox": return "amber / retro"
         case "ubuntu": return "orange / aubergine"
+        case "osakaJade": return "jade / green"
+        case "catppuccinLatte": return "light / pastel"
+        case "pulsar": return "cosmic / purple"
+        case "archwave": return "vaporwave / neon"
         default: return ""
         }
     }

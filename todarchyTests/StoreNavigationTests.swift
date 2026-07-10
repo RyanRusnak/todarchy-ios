@@ -137,6 +137,26 @@ final class StoreNavigationTests: XCTestCase {
         XCTAssertEqual(t.deferUntil, DeferParser.tomorrow())
     }
 
+    // MARK: - deleteComment
+
+    func testDeleteCommentRemovesMatchingComment() {
+        let taskId = store.tasks[0].id
+        let c1 = store.addComment(taskId: taskId, text: "first")!
+        let c2 = store.addComment(taskId: taskId, text: "second")!
+
+        XCTAssertTrue(store.deleteComment(taskId: taskId, commentId: c1))
+
+        let comments = store.tasks.first(where: { $0.id == taskId })!.comments
+        XCTAssertEqual(comments.map(\.id), [c2])
+    }
+
+    func testDeleteCommentUnknownIdIsNoOp() {
+        let taskId = store.tasks[0].id
+        _ = store.addComment(taskId: taskId, text: "keep me")
+        XCTAssertFalse(store.deleteComment(taskId: taskId, commentId: "nope"))
+        XCTAssertEqual(store.tasks.first(where: { $0.id == taskId })!.comments.count, 1)
+    }
+
     // MARK: - add
 
     func testAddFromQuickAddInsertsParsed() {
