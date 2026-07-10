@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "FBDC1B0F50574BE8122B0E86"
+               BlueprintIdentifier = "3BA2D6F46337C990B790EEB5"
                BuildableName = "todokase"
                BlueprintName = "todokase"
                ReferencedContainer = "container:todarchy.xcodeproj">
@@ -30,7 +30,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "FBDC1B0F50574BE8122B0E86"
+            BlueprintIdentifier = "3BA2D6F46337C990B790EEB5"
             BuildableName = "todokase"
             BlueprintName = "todokase"
             ReferencedContainer = "container:todarchy.xcodeproj">
@@ -53,7 +53,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "FBDC1B0F50574BE8122B0E86"
+            BlueprintIdentifier = "3BA2D6F46337C990B790EEB5"
             BuildableName = "todokase"
             BlueprintName = "todokase"
             ReferencedContainer = "container:todarchy.xcodeproj">
@@ -70,7 +70,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "FBDC1B0F50574BE8122B0E86"
+            BlueprintIdentifier = "3BA2D6F46337C990B790EEB5"
             BuildableName = "todokase"
             BlueprintName = "todokase"
             ReferencedContainer = "container:todarchy.xcodeproj">
