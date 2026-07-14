@@ -38,6 +38,47 @@ final class ContextStoreTests: XCTestCase {
         XCTAssertNil(store.addContext("@"))
     }
 
+    // MARK: - contextsByUsage (quick-add ordering)
+
+    func testContextsByUsageOrdersMostUsedFirst() {
+        // Register three contexts; give them different usage counts.
+        let work = store.addContext("work")!
+        let home = store.addContext("home")!
+        let gym = store.addContext("gym")!
+        store.tasks = [
+            TaskItem(list: "inbox", title: "a", ctx: work),
+            TaskItem(list: "inbox", title: "b", ctx: work),
+            TaskItem(list: "inbox", title: "c", ctx: work),
+            TaskItem(list: "inbox", title: "d", ctx: home),
+            TaskItem(list: "inbox", title: "e", ctx: gym),
+            TaskItem(list: "inbox", title: "f", ctx: gym),
+        ]
+        let ordered = store.contextsByUsage
+        // work (3) before gym (2) before home (1).
+        let iWork = ordered.firstIndex(of: work)!
+        let iGym = ordered.firstIndex(of: gym)!
+        let iHome = ordered.firstIndex(of: home)!
+        XCTAssertLessThan(iWork, iGym)
+        XCTAssertLessThan(iGym, iHome)
+    }
+
+    func testContextsByUsageSinksUnusedBehindUsed() {
+        let gym = store.addContext("gym")!
+        store.tasks = [TaskItem(list: "inbox", title: "lift", ctx: gym)]
+        let ordered = store.contextsByUsage
+        // The one used context should come first, ahead of every never-used
+        // built-in default.
+        XCTAssertEqual(ordered.first, gym)
+        XCTAssertEqual(Set(ordered), Set(store.contexts),
+                       "Ordering is a pure permutation — no contexts added or dropped.")
+    }
+
+    func testContextsByUsageIsStableWithNoUsage() {
+        // With no tasks, ordering must equal the persisted order (stable).
+        store.tasks = []
+        XCTAssertEqual(store.contextsByUsage, store.contexts)
+    }
+
     // MARK: - removeContext
 
     func testRemoveContextDropsFromList() {

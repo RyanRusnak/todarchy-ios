@@ -317,8 +317,12 @@ final class AutomergeStore {
         if let ctxStr = try stringValue(obj: obj, key: "ctx"), !ctxStr.isEmpty {
             task.ctx = TaskContext(rawValue: ctxStr)
         }
-        if let dueStr = try stringValue(obj: obj, key: "due"), !dueStr.isEmpty {
-            task.due = DueBucket(rawValue: dueStr)
+        // Prefer the absolute `dueDate` (ms-epoch); fall back to the legacy /
+        // cross-platform `due` bucket string, resolving it to a concrete date.
+        if let ms = try intValue(obj: obj, key: "dueDate") {
+            task.dueDate = Date(millisecondsSince1970: ms)
+        } else if let dueStr = try stringValue(obj: obj, key: "due"), !dueStr.isEmpty {
+            task.dueDate = DueDate.resolve(DueBucket(rawValue: dueStr))
         }
         if let ms = try intValue(obj: obj, key: "doneAt") { task.doneAt = Date(millisecondsSince1970: ms) }
         if let ms = try intValue(obj: obj, key: "deferUntil") { task.deferUntil = Date(millisecondsSince1970: ms) }
@@ -362,7 +366,14 @@ final class AutomergeStore {
         try doc.put(obj: obj, key: "list", value: .String(task.list))
         try doc.put(obj: obj, key: "title", value: .String(task.title))
         try doc.put(obj: obj, key: "ctx", value: .String(task.ctx?.rawValue ?? ""))
+        // Write the coarse bucket string (cross-platform peers still read it)
+        // and the absolute `dueDate` (our source of truth).
         try doc.put(obj: obj, key: "due", value: .String(task.due?.rawValue ?? ""))
+        if let d = task.dueDate {
+            try doc.put(obj: obj, key: "dueDate", value: .Int(d.millisecondsSince1970))
+        } else {
+            try? doc.delete(obj: obj, key: "dueDate")
+        }
         try doc.put(obj: obj, key: "note", value: .String(task.note))
         try doc.put(obj: obj, key: "created", value: .Int(task.created.millisecondsSince1970))
         if let d = task.doneAt {

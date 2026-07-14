@@ -100,8 +100,8 @@ struct TaskRow: View {
                         .foregroundStyle(Theme.fgMute)
                     }
 
-                    if let due = task.due {
-                        DueChip(due: due)
+                    if let d = task.dueDate {
+                        DueChip(date: d)
                     }
 
                     if task.isDeferred, let d = task.deferUntil {

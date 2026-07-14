@@ -166,7 +166,10 @@ struct TaskItem: Identifiable, Hashable, Codable {
     var list: String                // "inbox" or "p_<id>"
     var title: String
     var ctx: TaskContext?
-    var due: DueBucket?
+    /// Absolute due date (source of truth). Stored as a real date — not a
+    /// fuzzy bucket — so relative labels ("today", "tomorrow", "overdue")
+    /// recompute from it and roll over as days pass. See `DueDate`.
+    var dueDate: Date?
     var note: String = ""
     var created: Date = Date()
     var doneAt: Date?
@@ -187,6 +190,22 @@ struct TaskItem: Identifiable, Hashable, Codable {
         return d > Date()
     }
 
+    /// Coarse bucket derived from `dueDate`, recomputed relative to now.
+    /// Retained so existing grouping / counts / the cross-platform `due`
+    /// wire string keep working — and now they roll over, since the bucket
+    /// is no longer stored. `nil` when the task has no due date.
+    var due: DueBucket? {
+        guard let dueDate else { return nil }
+        return DueDate.bucket(for: dueDate)
+    }
+
+    /// Rich display label + color for due chips (overdue / today / tomorrow /
+    /// weekday / calendar date). `nil` when the task has no due date.
+    var dueDisplay: (label: String, color: Color)? {
+        guard let dueDate else { return nil }
+        return DueDate.display(for: dueDate)
+    }
+
     var sortPos: Date { pos ?? created }
 
     /// Swift-side ids stay UUID-shaped (lowercased). Other platforms can
@@ -196,7 +215,7 @@ struct TaskItem: Identifiable, Hashable, Codable {
     // MARK: - Codable: linux-compat shape
 
     private enum CodingKeys: String, CodingKey {
-        case id, list, title, ctx, due, note
+        case id, list, title, ctx, due, dueDate, note
         case created, doneAt, deferUntil, parent, pos, comments
     }
 
@@ -218,7 +237,10 @@ struct TaskItem: Identifiable, Hashable, Codable {
         self.list = list
         self.title = title
         self.ctx = ctx
-        self.due = due
+        // Resolve the convenience bucket to an absolute date at construction
+        // time (anchored to now). Call sites and seeds still pass `.today` /
+        // `.tomorrow` / `.thisWeek`; the stored value is a real date.
+        self.dueDate = DueDate.resolve(due)
         self.note = note
         self.created = created
         self.doneAt = doneAt
@@ -234,9 +256,17 @@ struct TaskItem: Identifiable, Hashable, Codable {
         self.list = try c.decode(String.self, forKey: .list)
         self.title = try c.decode(String.self, forKey: .title)
         self.ctx = try c.decodeIfPresent(TaskContext.self, forKey: .ctx)
-        // Linux writes "" for "no due"; normalize.
-        let dueStr = try c.decodeIfPresent(String.self, forKey: .due)
-        self.due = (dueStr?.isEmpty == false) ? DueBucket(rawValue: dueStr!) : nil
+        // Prefer the absolute `dueDate` (ms-epoch). Fall back to the legacy /
+        // cross-platform `due` bucket string when a peer only ships that —
+        // resolving it to a concrete date relative to now (Linux writes "" for
+        // "no due", so normalize the empty case).
+        if let ms = try c.decodeIfPresent(Int64.self, forKey: .dueDate) {
+            self.dueDate = Date(millisecondsSince1970: ms)
+        } else {
+            let dueStr = try c.decodeIfPresent(String.self, forKey: .due)
+            let bucket = (dueStr?.isEmpty == false) ? DueBucket(rawValue: dueStr!) : nil
+            self.dueDate = DueDate.resolve(bucket)
+        }
         self.note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
         self.created = Date(millisecondsSince1970: try c.decode(Int64.self, forKey: .created))
         if let ms = try c.decodeIfPresent(Int64.self, forKey: .doneAt) {
@@ -260,6 +290,9 @@ struct TaskItem: Identifiable, Hashable, Codable {
         try c.encode(list, forKey: .list)
         try c.encode(title, forKey: .title)
         try c.encodeIfPresent(ctx, forKey: .ctx)
+        // Emit the absolute date (our source of truth) AND the coarse bucket
+        // string, so cross-platform peers that still read `due` keep working.
+        try c.encodeIfPresent(dueDate?.millisecondsSince1970, forKey: .dueDate)
         try c.encode(due?.rawValue ?? "", forKey: .due)
         try c.encode(note, forKey: .note)
         try c.encode(created.millisecondsSince1970, forKey: .created)
@@ -429,5 +462,82 @@ extension Date {
 
     var millisecondsSince1970: Int64 {
         Int64((timeIntervalSince1970 * 1000).rounded())
+    }
+}
+
+// MARK: - Due-date semantics
+
+/// Due-date logic for tasks.
+///
+/// Tasks store an *absolute* `dueDate` (see `TaskItem.dueDate`). The old model
+/// stored a fuzzy `DueBucket` token (`today` / `tomorrow` / `this week`) with
+/// no anchor date, so a task set to "tomorrow" rendered "tomorrow" forever — it
+/// could never roll over to "today" the next day. Storing a real date fixes
+/// that: the label is recomputed from the date relative to *now* every time
+/// it's shown.
+///
+/// `DueBucket` is retained as a coarse presentation/grouping concept (and for
+/// the cross-platform wire `due` string), derived from `dueDate` on the fly.
+/// The rich label used on task rows (`display`) goes further — overdue,
+/// weekday names, and calendar dates — without storing any of those as state.
+enum DueDate {
+    /// Resolve a user-picked bucket into a concrete due date, anchored to
+    /// `now`. `today` → start of today, `tomorrow` → start of tomorrow,
+    /// `this week` → start of the day one week out. Start-of-day keeps the
+    /// comparison in `bucket(for:)`/`display(for:)` purely day-granular.
+    static func resolve(_ bucket: DueBucket?, now: Date = Date(), calendar: Calendar = .current) -> Date? {
+        guard let bucket else { return nil }
+        let start = calendar.startOfDay(for: now)
+        switch bucket {
+        case .today:    return start
+        case .tomorrow: return calendar.date(byAdding: .day, value: 1, to: start) ?? start
+        case .thisWeek: return calendar.date(byAdding: .day, value: 7, to: start) ?? start
+        }
+    }
+
+    /// Whole days from the start of `now`'s day to the start of `date`'s day.
+    /// Negative = overdue, 0 = today, 1 = tomorrow, …
+    static func daysUntil(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> Int {
+        let a = calendar.startOfDay(for: now)
+        let b = calendar.startOfDay(for: date)
+        return calendar.dateComponents([.day], from: a, to: b).day ?? 0
+    }
+
+    /// Coarse bucket for grouping / counts / the cross-platform `due` string.
+    /// Overdue collapses into `.today` (it's just as urgent), anything past
+    /// tomorrow is `.thisWeek`.
+    static func bucket(for date: Date, now: Date = Date(), calendar: Calendar = .current) -> DueBucket {
+        switch daysUntil(date, now: now, calendar: calendar) {
+        case ..<1:  return .today       // overdue or today
+        case 1:     return .tomorrow
+        default:    return .thisWeek
+        }
+    }
+
+    /// Rich, roll-over-aware label + color for display chips.
+    static func display(for date: Date, now: Date = Date(), calendar: Calendar = .current) -> (label: String, color: Color) {
+        let days = daysUntil(date, now: now, calendar: calendar)
+        switch days {
+        case ..<0:
+            return ("overdue", Theme.danger)
+        case 0:
+            return ("today", Theme.danger)
+        case 1:
+            return ("tomorrow", Theme.warn)
+        case 2...6:
+            // Weekday name, e.g. "Fri".
+            let f = DateFormatter()
+            f.calendar = calendar
+            f.locale = .current
+            f.setLocalizedDateFormatFromTemplate("EEE")
+            return (f.string(from: date), Theme.blue)
+        default:
+            // Calendar date, e.g. "Jul 20".
+            let f = DateFormatter()
+            f.calendar = calendar
+            f.locale = .current
+            f.setLocalizedDateFormatFromTemplate("MMM d")
+            return (f.string(from: date), Theme.blue)
+        }
     }
 }

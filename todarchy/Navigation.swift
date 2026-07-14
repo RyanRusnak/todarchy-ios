@@ -33,10 +33,22 @@ extension TaskStore {
     func selectLast() { selectedTaskId = viewTasks.last?.id }
 
     /// Returns true if a task was toggled.
+    ///
+    /// When completing a task in a list that hides done items (the common
+    /// case), the toggled task drops out of `viewTasks`. Advance selection to
+    /// the nearest surviving neighbor — captured *before* the toggle — so a
+    /// rapid "complete, complete, complete" keyboard flow keeps focus on the
+    /// next actionable task instead of stranding it on a now-hidden row.
     @discardableResult
     func toggleSelectedDone() -> Bool {
-        guard let id = selectedTaskId else { return false }
+        guard let id = selectedTaskId,
+              let idx = viewTasks.firstIndex(where: { $0.id == id }) else { return false }
         toggleDone(id)
+        let updated = viewTasks
+        // If the task is still visible (e.g. showDone is on, or it was
+        // un-completed), leave selection where it is.
+        if updated.contains(where: { $0.id == id }) { return true }
+        selectedTaskId = updated.isEmpty ? nil : updated[min(idx, updated.count - 1)].id
         return true
     }
 

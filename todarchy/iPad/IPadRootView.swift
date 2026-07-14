@@ -550,7 +550,7 @@ private struct IPadCaptureSheet: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(store.contexts) { c in
+                    ForEach(store.contextsByUsage) { c in
                         tokenButton(c.rawValue, color: c.color) { append(c.rawValue) }
                     }
                     tokenButton("!today", color: Theme.danger) { append("!today") }

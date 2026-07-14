@@ -23,7 +23,12 @@ struct MarkdownText: View {
 }
 
 private extension Theme {
-    static let codeBg = Color.black.opacity(0.30)
+    /// Code / code-block background, derived from the active palette so it
+    /// reads correctly on both dark and light themes. A fixed
+    /// `Color.black.opacity(…)` overlay turns into a muddy dark box on light
+    /// palettes (Catppuccin Latte); layering the palette's own `bgSoft` over
+    /// `border` keeps the block subtly inset in every theme.
+    static var codeBg: Color { Theme.bgSoft.mix(Theme.border, by: 0.5) }
 }
 
 extension MarkdownUI.Theme {
@@ -31,7 +36,15 @@ extension MarkdownUI.Theme {
     /// palette. Headings stay mono-weighted to fit the app's vibe;
     /// body text uses the same `Typo.mono(13)` the inspector text
     /// blocks use; links pop in the accent color.
-    static let todarchy = MarkdownUI.Theme()
+    ///
+    /// Computed (not a stored `static let`) so it re-reads `ThemePalette.current`
+    /// every time it's built. A frozen static captured the palette active at
+    /// first access, so after switching themes the markdown kept the old
+    /// foreground — a light-on-light (or dark-on-dark) wash that was the root
+    /// of the "can't be seen on Catppuccin Latte" report. `MarkdownText` is
+    /// rebuilt on theme change (root view pins `.id(palette.id)`), so this
+    /// recomputes with the live palette.
+    static var todarchy: MarkdownUI.Theme { MarkdownUI.Theme()
         .text {
             FontFamily(.custom("JetBrainsMono-Regular"))
             FontSize(13)
@@ -109,4 +122,5 @@ extension MarkdownUI.Theme {
                 }
                 .markdownMargin(top: 4, bottom: 8)
         }
+    }
 }

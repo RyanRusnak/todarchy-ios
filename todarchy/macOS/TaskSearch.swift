@@ -248,8 +248,8 @@ struct TaskSearchSheet: View {
             if let c = task.ctx {
                 CtxChip(ctx: c, highlighted: false)
             }
-            if let d = task.due {
-                DueChip(due: d)
+            if let d = task.dueDate {
+                DueChip(date: d)
             }
         }
         .padding(.horizontal, 18)

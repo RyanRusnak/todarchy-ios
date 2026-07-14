@@ -115,6 +115,35 @@ final class TaskStore: ObservableObject {
 
     // MARK: - Context mutations
 
+    /// Contexts ordered for quick-add pickers: most-used first, so the
+    /// contexts you actually reach for float to the front and unused built-in
+    /// defaults sink to the end (where they stop crowding out the ones that
+    /// matter). Score is the number of tasks carrying each context; ties break
+    /// on the recency of the most recent such task, then on the context's
+    /// existing position (so the ordering is stable and defaults keep their
+    /// relative order among themselves). The persisted `contexts` array and
+    /// the sidebar/editor orderings are untouched — this is presentation-only.
+    var contextsByUsage: [TaskContext] {
+        var count: [TaskContext: Int] = [:]
+        var recent: [TaskContext: Date] = [:]
+        for t in tasks {
+            guard let c = t.ctx else { continue }
+            count[c, default: 0] += 1
+            let stamp = t.sortPos
+            if stamp > (recent[c] ?? .distantPast) { recent[c] = stamp }
+        }
+        return contexts.enumerated().sorted { a, b in
+            let ca = count[a.element] ?? 0, cb = count[b.element] ?? 0
+            if ca != cb { return ca > cb }
+            switch (recent[a.element], recent[b.element]) {
+            case let (ra?, rb?) where ra != rb: return ra > rb
+            case (.some, .none): return true      // used sorts before never-used
+            case (.none, .some): return false
+            default: return a.offset < b.offset   // stable fallback
+            }
+        }.map { $0.element }
+    }
+
     /// Add a context label. Idempotent: re-adding an existing context (case-
     /// insensitive after normalization) is a no-op. Used by both the editor
     /// sheet and `add(raw:list:)` for auto-discovery from `@token` parsing.
@@ -316,6 +345,8 @@ final class TaskStore: ObservableObject {
     }
 
     func countDueToday(in listId: String) -> Int {
+        // `.today` covers overdue too (DueDate.bucket collapses past-due into
+        // today), so this badge counts everything actionable today or earlier.
         tasks.filter { $0.list == listId && !$0.isDone && $0.due == .today }.count
     }
 
@@ -416,7 +447,18 @@ final class TaskStore: ObservableObject {
     func setDue(_ id: String, due: DueBucket?) {
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
         snapshot()
-        tasks[idx].due = due
+        // Resolve the picked bucket to an absolute date at set-time, so the
+        // label rolls over as days pass (a task set to "tomorrow" becomes
+        // "today" the next day). `nil` clears the due date.
+        tasks[idx].dueDate = DueDate.resolve(due)
+        stamp(&tasks[idx])
+    }
+
+    /// Set an explicit due date (used by tests and any future date-picker UI).
+    func setDueDate(_ id: String, date: Date?) {
+        guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
+        snapshot()
+        tasks[idx].dueDate = date
         stamp(&tasks[idx])
     }
 
@@ -722,10 +764,20 @@ final class TaskStore: ObservableObject {
     /// authoritative.
     static func sortTasks_(_ a: TaskItem, _ b: TaskItem) -> Bool {
         if a.isDone != b.isDone { return !a.isDone && b.isDone }
-        let ar = a.due?.sortOrder ?? 3
-        let br = b.due?.sortOrder ?? 3
-        if ar != br { return ar < br }
-        return a.sortPos < b.sortPos
+        // Dated tasks sort before undated; among dated, the soonest (and
+        // overdue, being earliest) come first. Sorting by the absolute date
+        // rather than the coarse bucket keeps ordering stable as labels roll
+        // over and orders same-bucket tasks by actual due date.
+        switch (a.dueDate, b.dueDate) {
+        case let (ad?, bd?) where ad != bd:
+            return ad < bd
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        default:
+            return a.sortPos < b.sortPos
+        }
     }
 
     private static func sortTasks(_ a: TaskItem, _ b: TaskItem) -> Bool {

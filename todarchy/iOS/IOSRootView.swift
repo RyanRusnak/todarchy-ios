@@ -747,7 +747,7 @@ private struct QuickAddChips: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(store.contexts) { c in
+                ForEach(store.contextsByUsage) { c in
                     chip(c.rawValue, color: c.color) { insert(c.rawValue) }
                 }
                 Divider().frame(height: 16).background(Theme.border)

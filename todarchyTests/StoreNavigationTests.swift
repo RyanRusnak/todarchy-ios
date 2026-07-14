@@ -81,10 +81,14 @@ final class StoreNavigationTests: XCTestCase {
     }
 
     func testToggleSelectedDoneMarksAndUnmarks() {
+        // Keep done items visible so selection stays on the same task across
+        // both toggles — otherwise focus advances after completion (see
+        // testCompletingSelectedAdvancesToNextRow) and the second toggle
+        // would act on a different row.
+        store.showDone = true
         store.selectFirst()
         let id = store.selectedTaskId!
         XCTAssertTrue(store.toggleSelectedDone())
-        // After toggle, the task is done. With showDone=false it falls out of viewTasks but still exists.
         let task = store.tasks.first(where: { $0.id == id })!
         XCTAssertTrue(task.isDone)
         XCTAssertTrue(store.toggleSelectedDone())
@@ -427,5 +431,86 @@ final class StoreNavigationTests: XCTestCase {
         store.selectNextList()
         XCTAssertEqual(currentListId(), store.allLists[1].id,
                        "Starts at index 0 then advances to 1")
+    }
+
+    // MARK: - toggleSelectedDone focus advance
+
+    func testCompletingSelectedAdvancesToNextRow() {
+        // With done items hidden, completing the selected task drops it from
+        // the view — selection should land on the task that was next, not
+        // strand on the now-hidden completed row.
+        store.selectFirst()
+        let first = store.viewTasks[0].id
+        let second = store.viewTasks[1].id
+        store.toggleSelectedDone()
+        XCTAssertFalse(store.viewTasks.contains { $0.id == first },
+                       "Completed task should leave the view when done is hidden")
+        XCTAssertEqual(store.selectedTaskId, second,
+                       "Focus should advance to the previously-next task")
+    }
+
+    func testCompletingLastRowSelectsNewLast() {
+        store.selectLast()
+        let count = store.viewTasks.count
+        let newLast = store.viewTasks[count - 2].id
+        store.toggleSelectedDone()
+        XCTAssertEqual(store.selectedTaskId, newLast,
+                       "Completing the last row clamps focus to the new last row")
+    }
+
+    func testCompletingWhenShowDoneKeepsSelection() {
+        // When done items stay visible, the toggled task is still in the
+        // view — selection should not move.
+        store.showDone = true
+        store.selectFirst()
+        let first = store.viewTasks[0].id
+        store.toggleSelectedDone()
+        XCTAssertEqual(store.selectedTaskId, first,
+                       "Selection stays put when the completed task remains visible")
+    }
+
+    // MARK: - Due date (absolute, roll-over)
+
+    private var cal: Calendar { .current }
+    private func day(_ offset: Int, from now: Date) -> Date {
+        cal.date(byAdding: .day, value: offset, to: cal.startOfDay(for: now))!
+    }
+
+    func testDueDateResolvesBucketToAbsoluteDate() {
+        let now = Date()
+        XCTAssertEqual(DueDate.resolve(.today, now: now), cal.startOfDay(for: now))
+        XCTAssertEqual(DueDate.resolve(.tomorrow, now: now), day(1, from: now))
+        XCTAssertEqual(DueDate.resolve(.thisWeek, now: now), day(7, from: now))
+        XCTAssertNil(DueDate.resolve(nil, now: now))
+    }
+
+    func testDueLabelRollsOverAsDaysPass() {
+        // A due date fixed at "tomorrow" as of day 0 should read "tomorrow"
+        // on day 0, "today" on day 1, and "overdue" on day 2 — the whole
+        // point of storing an absolute date instead of a fuzzy bucket.
+        let day0 = Date()
+        let dueDate = DueDate.resolve(.tomorrow, now: day0)!
+        XCTAssertEqual(DueDate.display(for: dueDate, now: day0).label, "tomorrow")
+        XCTAssertEqual(DueDate.display(for: dueDate, now: day(1, from: day0)).label, "today")
+        XCTAssertEqual(DueDate.display(for: dueDate, now: day(2, from: day0)).label, "overdue")
+    }
+
+    func testDueBucketCollapsesOverdueIntoToday() {
+        let now = Date()
+        XCTAssertEqual(DueDate.bucket(for: day(-3, from: now), now: now), .today)
+        XCTAssertEqual(DueDate.bucket(for: day(0, from: now), now: now), .today)
+        XCTAssertEqual(DueDate.bucket(for: day(1, from: now), now: now), .tomorrow)
+        XCTAssertEqual(DueDate.bucket(for: day(5, from: now), now: now), .thisWeek)
+    }
+
+    func testSetDueStoresAbsoluteDateAndClears() {
+        store.selectFirst()
+        let id = store.selectedTaskId!
+        store.setDue(id, due: .tomorrow)
+        let t = store.tasks.first { $0.id == id }!
+        XCTAssertEqual(t.dueDate, DueDate.resolve(.tomorrow))
+        XCTAssertEqual(t.due, .tomorrow)   // computed bucket round-trips
+        store.setDue(id, due: nil)
+        XCTAssertNil(store.tasks.first { $0.id == id }!.dueDate)
     }
 }

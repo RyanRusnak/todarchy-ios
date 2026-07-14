@@ -23,11 +23,26 @@ struct CtxChip: View {
 }
 
 struct DueChip: View {
-    let due: DueBucket
+    let label: String
+    let color: Color
+
+    /// Token-preview chip (e.g. the "!today" you just typed in the composer) —
+    /// renders the coarse bucket with its leading `!`.
+    init(due: DueBucket) {
+        self.label = "!\(due.label)"
+        self.color = due.color
+    }
+
+    /// Rich, roll-over-aware chip for a task's actual due date
+    /// (today / tomorrow / overdue / weekday / calendar date).
+    init(date: Date) {
+        let d = DueDate.display(for: date)
+        self.label = d.label
+        self.color = d.color
+    }
 
     var body: some View {
-        let color = due.color
-        Text("!\(due.label)")
+        Text(label)
             .font(Typo.mono(10.5, weight: .semibold))
             .tracking(0.4)
             .textCase(.uppercase)
