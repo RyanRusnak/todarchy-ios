@@ -223,9 +223,6 @@ enum PaletteKeyRouter {
 @MainActor
 final class MacMainKeyMonitor: ObservableObject {
     weak var store: TaskStore?
-    var paletteShowing = false
-    var captureShowing = false
-    var searchShowing = false
     private var router = MainKeyRouter()
     private var monitor: Any?
 
@@ -247,7 +244,17 @@ final class MacMainKeyMonitor: ObservableObject {
 
     /// Decide whether to consume an incoming event.
     func handle(_ event: NSEvent) -> Bool {
-        if paletteShowing || captureShowing || searchShowing { return false }
+        // A sheet / modal is frontmost — let it (and its own key monitor) own
+        // the keyboard. This is a LIVE check against AppKit rather than the
+        // old cached `paletteShowing`/`captureShowing`/`searchShowing` bools:
+        // those were mirrored from SwiftUI `.onChange`, and with seven stacked
+        // `.sheet` modifiers on the root view a sheet could dismiss (or fail to
+        // present) without its `onChange` firing, leaving a flag stuck `true`.
+        // A stuck flag made `handle` return false for every key, so the whole
+        // window fell through to AppKit and beeped while the mouse still
+        // worked — exactly the intermittent "all shortcuts dead" hang. Reading
+        // the window state at event time can't desync.
+        if MacFocusInspector.modalIsFrontmost() { return false }
         if store?.editingTaskId != nil { return false }
         if MacFocusInspector.firstResponderIsEditable() { return false }
         let chars = event.charactersIgnoringModifiers ?? ""
@@ -401,6 +408,19 @@ enum MacFocusInspector {
         let fr = window.firstResponder
         if let tv = fr as? NSTextView { return tv.isEditable }
         if fr is NSText { return true }
+        return false
+    }
+
+    /// True when a sheet or app-modal window is frontmost — i.e. the main
+    /// window's vim key bindings should stand down and let the modal handle
+    /// keys. SwiftUI presents `.sheet` on macOS as an attached window sheet,
+    /// so a live query of the key window covers every sheet in the root view
+    /// without the main monitor having to be told which ones are open.
+    static func modalIsFrontmost() -> Bool {
+        if NSApp.modalWindow != nil { return true }
+        guard let key = NSApp.keyWindow else { return false }
+        if key.isSheet { return true }
+        if key.attachedSheet != nil { return true }
         return false
     }
 }

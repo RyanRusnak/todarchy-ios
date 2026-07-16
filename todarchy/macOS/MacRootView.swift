@@ -149,9 +149,9 @@ struct MacRootView: View {
             keyMonitor.uninstall()
             clickAwayResigner.uninstall()
         }
-        .onChange(of: showPalette) { _, v in keyMonitor.paletteShowing = v }
-        .onChange(of: showCapture) { _, v in keyMonitor.captureShowing = v }
-        .onChange(of: showSearch) { _, v in keyMonitor.searchShowing = v }
+        // NB: the key monitor no longer mirrors sheet-visibility flags — it
+        // reads AppKit's live modal/sheet state at event time instead (see
+        // MacMainKeyMonitor.handle), which can't get stuck out of sync.
     }
 
     /// Destination lists for the send-to picker — every list except the one
