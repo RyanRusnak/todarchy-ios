@@ -129,7 +129,7 @@ common = {
   'CLANG_ENABLE_MODULES' => 'YES',
   'ENABLE_PREVIEWS' => 'YES',
   'CURRENT_PROJECT_VERSION' => '1',
-  'MARKETING_VERSION' => '0.40',
+  'MARKETING_VERSION' => '0.41',
   'DEVELOPMENT_TEAM' => '',
   'CODE_SIGN_STYLE' => 'Automatic',
   # Leave CODE_SIGN_IDENTITY unset so automatic signing can pick the
