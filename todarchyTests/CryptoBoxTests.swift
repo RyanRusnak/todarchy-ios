@@ -141,4 +141,69 @@ final class CryptoBoxTests: XCTestCase {
         // 16 bytes — valid base64url but wrong length (we want 32).
         XCTAssertNil(CryptoBox.decodeKey(from: "AAAAAAAAAAAAAAAAAAAAAA"))
     }
+
+    // MARK: - v2: salt carried in the clear header
+
+    func testSaltedEnvelopeRoundTrips() throws {
+        let key = CryptoBox.generateKey()
+        let salt = Data((0..<16).map { UInt8($0) })
+        let envelope = try CryptoBox.seal(Data("payload".utf8), with: key, salt: salt)
+        XCTAssertEqual(try CryptoBox.open(envelope, with: key), Data("payload".utf8))
+    }
+
+    func testSaltIsReadableWithoutTheKey() throws {
+        // The whole point of v2: a device holding only the passphrase can
+        // recover the KDF salt, which otherwise lives inside the very doc
+        // it can't decrypt yet.
+        let salt = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+        let envelope = try CryptoBox.seal(Data("secret".utf8),
+                                          with: CryptoBox.generateKey(),
+                                          salt: salt)
+        XCTAssertEqual(CryptoBox.salt(in: envelope), salt)
+    }
+
+    func testSaltedEnvelopeStillHidesThePlaintext() throws {
+        let salt = Data(repeating: 0xAB, count: 16)
+        let envelope = try CryptoBox.seal(Data("topsecret".utf8),
+                                          with: CryptoBox.generateKey(),
+                                          salt: salt)
+        XCTAssertNil(envelope.range(of: Data("topsecret".utf8)),
+                     "Only the header is public — the body must not be.")
+    }
+
+    func testV1EnvelopeHasNoSalt() throws {
+        let envelope = try CryptoBox.seal(Data("x".utf8), with: CryptoBox.generateKey())
+        XCTAssertNil(CryptoBox.salt(in: envelope))
+        XCTAssertEqual(envelope[envelope.startIndex + 4], CryptoBox.currentVersion)
+    }
+
+    func testBothVersionsProbeAsEnvelopes() throws {
+        let key = CryptoBox.generateKey()
+        let v1 = try CryptoBox.seal(Data("a".utf8), with: key)
+        let v2 = try CryptoBox.seal(Data("a".utf8), with: key, salt: Data(repeating: 1, count: 16))
+        XCTAssertTrue(CryptoBox.isEnvelope(v1))
+        XCTAssertTrue(CryptoBox.isEnvelope(v2))
+    }
+
+    func testSaltedEnvelopeRejectsTheWrongKey() throws {
+        let envelope = try CryptoBox.seal(Data("s".utf8),
+                                          with: CryptoBox.generateKey(),
+                                          salt: Data(repeating: 2, count: 16))
+        XCTAssertThrowsError(try CryptoBox.open(envelope, with: CryptoBox.generateKey()))
+    }
+
+    func testSealRejectsAMisSizedSalt() {
+        XCTAssertThrowsError(try CryptoBox.seal(Data("x".utf8),
+                                                with: CryptoBox.generateKey(),
+                                                salt: Data(repeating: 0, count: 8)))
+    }
+
+    func testUnknownVersionIsNotAnEnvelope() throws {
+        var envelope = try CryptoBox.seal(Data("x".utf8), with: CryptoBox.generateKey())
+        envelope[envelope.startIndex + 4] = 99
+        XCTAssertFalse(CryptoBox.isEnvelope(envelope))
+        XCTAssertThrowsError(try CryptoBox.open(envelope, with: CryptoBox.generateKey())) { error in
+            XCTAssertEqual(error as? CryptoBox.BoxError, .unsupportedVersion(99))
+        }
+    }
 }

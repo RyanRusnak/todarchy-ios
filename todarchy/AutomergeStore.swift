@@ -78,6 +78,18 @@ final class AutomergeStore {
         }
     }
 
+    /// True iff `bytes` parse as an Automerge document.
+    ///
+    /// `init(data:)` deliberately falls back to the empty seed when they
+    /// don't, which is right for "the file is missing or corrupt, carry
+    /// on" but wrong for anything that then *merges* the result — merging
+    /// the seed into a live doc silently reintroduces the built-in
+    /// contexts. Callers handling untrusted bytes (relay payloads) check
+    /// here first and refuse rather than merge.
+    static func isDocument(_ bytes: Data) -> Bool {
+        (try? Document(bytes)) != nil
+    }
+
     /// Serialize to bytes for disk.
     func save() -> Data {
         locked { doc.save() }
@@ -125,9 +137,11 @@ final class AutomergeStore {
         try locked {
             let tasks = try readTasks().sorted { $0.sortPos < $1.sortPos }
             let projects = try readProjects()
-            let contexts = try readContexts()
+            let contexts = try readContextList(key: "contexts")
+            let retired = try readContextList(key: "retiredContexts")
             return TodarchySnapshot(
-                tasks: tasks, projects: projects, contexts: contexts
+                tasks: tasks, projects: projects,
+                contexts: contexts, retiredContexts: retired
             )
         }
     }
@@ -137,26 +151,39 @@ final class AutomergeStore {
     /// scheduleSave on every tick — we only rewrite when the list differs
     /// to avoid pointless Automerge churn.
     func writeContexts(_ contexts: [TaskContext]) throws {
-        try locked {
-            let current = try readContexts() ?? []
-            if current == contexts { return }
-            let listObj = try requireList(key: "contexts")
-            let len = try doc.length(obj: listObj)
-            // Clear then reinsert. This isn't great for merge semantics
-            // (two devices editing concurrently can produce duplicates)
-            // but the contexts list is short and edits are rare. If it
-            // becomes a problem we can move to per-context map keys.
-            for _ in 0..<len {
-                try doc.delete(obj: listObj, index: 0)
-            }
-            for (i, c) in contexts.enumerated() {
-                try doc.insert(obj: listObj, index: UInt64(i), value: .String(c.rawValue))
-            }
+        try locked { try writeContextList(contexts, key: "contexts") }
+    }
+
+    /// Contexts the user explicitly removed. Persisted — and therefore
+    /// synced — so that `TaskStore.adoptContextsFromTasks` doesn't
+    /// resurrect one on the next refresh just because tasks still carry
+    /// it, and so the removal reaches the user's other machines instead
+    /// of being undone there by adoption.
+    func writeRetiredContexts(_ contexts: [TaskContext]) throws {
+        try locked { try writeContextList(contexts, key: "retiredContexts") }
+    }
+
+    /// Shared body of `writeContexts` / `writeRetiredContexts`.
+    /// Caller must hold the lock.
+    private func writeContextList(_ contexts: [TaskContext], key: String) throws {
+        let current = try readContextList(key: key) ?? []
+        if current == contexts { return }
+        let listObj = try requireList(key: key)
+        let len = try doc.length(obj: listObj)
+        // Clear then reinsert. This isn't great for merge semantics
+        // (two devices editing concurrently can produce duplicates)
+        // but the contexts list is short and edits are rare. If it
+        // becomes a problem we can move to per-context map keys.
+        for _ in 0..<len {
+            try doc.delete(obj: listObj, index: 0)
+        }
+        for (i, c) in contexts.enumerated() {
+            try doc.insert(obj: listObj, index: UInt64(i), value: .String(c.rawValue))
         }
     }
 
-    private func readContexts() throws -> [TaskContext]? {
-        guard case let .Object(listId, .List) = try doc.get(obj: ObjId.ROOT, key: "contexts") else {
+    private func readContextList(key: String) throws -> [TaskContext]? {
+        guard case let .Object(listId, .List) = try doc.get(obj: ObjId.ROOT, key: key) else {
             return nil
         }
         let len = try doc.length(obj: listId)

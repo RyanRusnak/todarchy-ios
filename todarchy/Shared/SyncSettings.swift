@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 
 /// Owns the user's sync transport choice. Three modes:
 ///   - `.localOnly`     — doc lives only in Application Support.
@@ -20,6 +21,33 @@ final class SyncSettings: ObservableObject {
     @Published private(set) var isSyncing: Bool = false
     @Published private(set) var lastSyncError: String?
     @Published private(set) var serverHealth: ServerHealth = .unknown
+
+    /// Whether the main doc is encrypted on its way to the relay.
+    ///
+    /// Shared projects were always sealed under their own per-project key;
+    /// this is about everything else, which used to travel — and sit on
+    /// the relay — as plaintext Automerge bytes.
+    @Published private(set) var relayEncryption: RelayEncryption = .off
+
+    /// Argon2 salt lifted from a relay envelope we couldn't open. This is
+    /// the bootstrap path for a device that has the passphrase but has
+    /// never seen the doc: the salt normally lives *inside* the main doc,
+    /// which is exactly what we can't read yet. Feed it to
+    /// `MasterKey.derive(passphrase:salt:)`.
+    @Published private(set) var relayEnvelopeSalt: Data?
+
+    private var masterKeyObserver: AnyCancellable?
+
+    enum RelayEncryption: Equatable {
+        /// No passphrase on this device, and the relay isn't encrypted
+        /// either — bytes go up in the clear, as they always did.
+        case off
+        /// Sealed under the passphrase-derived master key.
+        case on
+        /// The relay holds ciphertext but this device can't open it.
+        /// Pushes are suppressed rather than downgrading the relay copy.
+        case locked
+    }
 
     /// One-shot user-facing message for share-link arrivals that can't
     /// be handled silently (e.g. link opened before any sync transport
@@ -51,6 +79,16 @@ final class SyncSettings: ObservableObject {
     private let modeKey = "todarchy.sync.mode"
 
     init() {
+        // Keep Persistence's copy of the relay key in step with the master
+        // key. Persistence seals on its own serial queue and can't hop to
+        // the MainActor to ask, so it holds a mirrored copy instead.
+        masterKeyObserver = MasterKey.shared.$currentKey
+            .sink { [weak self] _ in
+                // Deferred: `currentSalt` is assigned right after
+                // `currentKey`, so reading it inside the sink would race
+                // the pair apart.
+                DispatchQueue.main.async { self?.refreshRelayKey() }
+            }
         if let ts = UserDefaults.standard.object(forKey: lastMergedKey) as? Date {
             self.lastMergedAt = ts
         }
@@ -235,6 +273,31 @@ final class SyncSettings: ObservableObject {
 
     func markServerHealth(_ health: ServerHealth) {
         serverHealth = health
+    }
+
+    /// Push the current master key down to `Persistence` so relay payloads
+    /// can be sealed from the persistence queue, and republish the
+    /// user-visible encryption state.
+    func refreshRelayKey(persistence: TaskStorePersistence = .shared) {
+        if let key = MasterKey.shared.currentKey, let salt = MasterKey.shared.currentSalt {
+            persistence.relayKey = .init(key: key, salt: salt)
+            relayEncryption = .on
+            relayEnvelopeSalt = nil
+        } else {
+            persistence.relayKey = nil
+            // `.locked` is the interesting case — the relay is holding
+            // ciphertext we can't read — and Persistence tells us that by
+            // handing over an envelope salt.
+            relayEncryption = relayEnvelopeSalt == nil ? .off : .locked
+        }
+    }
+
+    /// Called by `Persistence` when a relay envelope couldn't be opened.
+    func noteRelayEnvelopeSalt(_ salt: Data) {
+        relayEnvelopeSalt = salt
+        if MasterKey.shared.currentKey == nil {
+            relayEncryption = .locked
+        }
     }
 
     // MARK: - Sync lifecycle

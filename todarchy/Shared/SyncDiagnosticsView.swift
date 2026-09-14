@@ -34,6 +34,7 @@ struct SyncDiagnosticsView: View {
                     row("server url", cfg.baseURL.absoluteString)
                     row("server id", cfg.mainDocId)
                     row("server health", healthLabel)
+                    row("relay encryption", relayEncryptionLabel)
                 }
                 row("last merged", settings.lastMergedAt?.formatted() ?? "never")
                 row("last error", settings.lastSyncError ?? "—")
@@ -50,6 +51,14 @@ struct SyncDiagnosticsView: View {
             .id(refreshTick)   // force re-read file attrs when Refresh tapped
         }
         .background(Theme.bg)
+    }
+
+    private var relayEncryptionLabel: String {
+        switch settings.relayEncryption {
+        case .on:     return "on (passphrase-derived key)"
+        case .off:    return "OFF — set a passphrase to seal relay data"
+        case .locked: return "locked — enter your passphrase to sync"
+        }
     }
 
     // MARK: - Computed

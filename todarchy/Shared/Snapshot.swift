@@ -16,14 +16,22 @@ struct TodarchySnapshot: Codable, Equatable {
     /// snapshots without the field decode cleanly; missing/empty
     /// means "fall back to the built-in seed set" at the call site.
     var contexts: [TaskContext]? = nil
+    /// Contexts the user explicitly removed. Kept alongside `contexts`
+    /// because contexts are also auto-adopted from the `ctx` values of
+    /// incoming tasks — without a record of deliberate removals, adoption
+    /// would put a deleted context straight back on the next sync.
+    /// Optional for the same back-compat reason as `contexts`.
+    var retiredContexts: [TaskContext]? = nil
 
     init(schema: Int = 1,
          tasks: [TaskItem],
          projects: [ProjectItem],
-         contexts: [TaskContext]? = nil) {
+         contexts: [TaskContext]? = nil,
+         retiredContexts: [TaskContext]? = nil) {
         self.schema = schema
         self.tasks = tasks
         self.projects = projects
         self.contexts = contexts
+        self.retiredContexts = retiredContexts
     }
 }

@@ -11,6 +11,12 @@ final class TaskStore: ObservableObject {
     /// and grown automatically when the parser encounters a new `@token`.
     @Published var contexts: [TaskContext] { didSet { if !isApplyingDiskState { scheduleSave() } } }
 
+    /// Contexts the user deliberately removed. `adoptContextsFromTasks`
+    /// skips these, so a removal sticks even while tasks still reference
+    /// the context. Synced like `contexts`, so removing a context on one
+    /// machine doesn't get undone by adoption on another.
+    @Published var retiredContexts: [TaskContext] { didSet { if !isApplyingDiskState { scheduleSave() } } }
+
     /// True while `refreshFromDisk` is reassigning `tasks`/`projects` from a
     /// loaded snapshot. Without this, each assignment would fire `didSet`
     /// which schedules a save of the just-loaded state — and if the user
@@ -60,10 +66,12 @@ final class TaskStore: ObservableObject {
             // wiping the user's chips on launch.
             let loaded = snapshot.contexts ?? []
             self.contexts = loaded.isEmpty ? TaskContext.allCases : loaded
+            self.retiredContexts = snapshot.retiredContexts ?? []
         } else {
             self.projects = Self.seedProjects
             self.tasks = Self.seedTasks()
             self.contexts = TaskContext.allCases
+            self.retiredContexts = []
             // Persist the seed so the on-disk doc starts with sensible content.
             persistence?.saveNow(.init(
                 tasks: self.tasks,
@@ -71,6 +79,10 @@ final class TaskStore: ObservableObject {
                 contexts: self.contexts
             ))
         }
+        // Tasks authored elsewhere (the Linux/web app, the MCP server,
+        // another device) arrive with `ctx` values this machine has never
+        // seen. Fold them in so the chip list is the same everywhere.
+        adoptContextsFromTasks()
 
         // When another device writes the shared .automerge file, refresh.
         persistence?.onExternalChange = { [weak self] in
@@ -96,7 +108,14 @@ final class TaskStore: ObservableObject {
         if let loaded = snap.contexts, !loaded.isEmpty {
             self.contexts = loaded
         }
+        if let retired = snap.retiredContexts {
+            self.retiredContexts = retired
+        }
         isApplyingDiskState = false
+        // Runs with `isApplyingDiskState` already cleared: anything adopted
+        // here is a genuine local change that has to be saved back so the
+        // rest of the fleet converges on the same list.
+        adoptContextsFromTasks()
         // Preserve selection if the task still exists.
         if let sid = selected, !tasks.contains(where: { $0.id == sid }) {
             self.selectedTaskId = nil
@@ -155,10 +174,43 @@ final class TaskStore: ObservableObject {
         // The TaskContext init enforces a single leading `@`, so contexts
         // with just punctuation collapse to "@" — refuse those.
         guard ctx.rawValue.count > 1 else { return nil }
+        // Adding back a previously removed context un-retires it, so
+        // adoption stops suppressing it.
+        if retiredContexts.contains(ctx) {
+            retiredContexts.removeAll { $0 == ctx }
+        }
         if contexts.contains(ctx) { return ctx }
         snapshot()
         contexts.append(ctx)
         return ctx
+    }
+
+    /// Fold every `ctx` referenced by a task into `contexts`.
+    ///
+    /// Local quick-add already registers the `@token` it parses, but tasks
+    /// that arrive over sync don't go through that path — a task created
+    /// on the Linux app, the web app, or via the MCP server carried a
+    /// context the Mac had never heard of, so the sidebar and pickers
+    /// disagreed machine to machine. Adoption makes the list a function of
+    /// the doc rather than of where a task happened to be typed.
+    ///
+    /// Deliberately removed contexts (`retiredContexts`) are skipped, so
+    /// this never resurrects one the user just deleted. Discovered
+    /// contexts are appended in sorted order so two machines adopting the
+    /// same batch end up with the same list instead of fighting over it.
+    @discardableResult
+    func adoptContextsFromTasks() -> [TaskContext] {
+        let known = Set(contexts)
+        let retired = Set(retiredContexts)
+        var discovered: Set<TaskContext> = []
+        for t in tasks {
+            guard let c = t.ctx, !known.contains(c), !retired.contains(c) else { continue }
+            discovered.insert(c)
+        }
+        guard !discovered.isEmpty else { return [] }
+        let added = discovered.sorted { $0.rawValue < $1.rawValue }
+        contexts.append(contentsOf: added)
+        return added
     }
 
     /// Remove a context. Tasks that reference it keep their `ctx` value —
@@ -169,6 +221,9 @@ final class TaskStore: ObservableObject {
         guard contexts.contains(ctx) else { return }
         snapshot()
         contexts.removeAll { $0 == ctx }
+        // Record the removal so `adoptContextsFromTasks` doesn't hand it
+        // straight back — here or on any other machine.
+        if !retiredContexts.contains(ctx) { retiredContexts.append(ctx) }
         if activeContextFilter == ctx { activeContextFilter = nil }
     }
 
@@ -181,6 +236,9 @@ final class TaskStore: ObservableObject {
         if target == from { return true }
         if contexts.contains(target) { return false }
         snapshot()
+        if retiredContexts.contains(target) {
+            retiredContexts.removeAll { $0 == target }
+        }
         if let idx = contexts.firstIndex(of: from) {
             contexts[idx] = target
         }
@@ -215,7 +273,8 @@ final class TaskStore: ObservableObject {
         pendingProjectDeletes.removeAll()
         pendingDoneAtClears.removeAll()
         persistence.scheduleSave(
-            .init(tasks: tasks, projects: projects, contexts: contexts),
+            .init(tasks: tasks, projects: projects,
+                  contexts: contexts, retiredContexts: retiredContexts),
             deletedTaskIds: taskDeletes,
             deletedProjectIds: projectDeletes,
             doneAtClears: doneAtClears

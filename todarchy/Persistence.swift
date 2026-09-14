@@ -14,7 +14,7 @@ import CryptoKit
 /// each task/project at its id; it never tombstones a key just because it's
 /// absent from the snapshot. Callers register explicit deletions via the
 /// `deletedTaskIds` / `deletedProjectIds` sets.
-final class TaskStorePersistence {
+final class TaskStorePersistence: @unchecked Sendable {
     static let shared = TaskStorePersistence()
 
     private(set) var fileURL: URL
@@ -81,6 +81,54 @@ final class TaskStorePersistence {
     /// changes. Started by `setFileURL` when the server client is
     /// installed; cancelled otherwise.
     private var serverPollTimer: Timer?
+
+    /// Key material for sealing the main doc on its way to the relay,
+    /// paired with the Argon2 salt it was derived from — the salt rides
+    /// in the envelope's clear header so another device holding only the
+    /// passphrase can re-derive.
+    struct RelayKey {
+        let key: SymmetricKey
+        let salt: Data
+    }
+
+    private let relayKeyLock = NSLock()
+    private var _relayKey: RelayKey?
+
+    /// Installed by `SyncSettings` whenever the master key unlocks, locks,
+    /// or its salt changes. Unlike everything else here it is *not*
+    /// queue-confined — it's written from the MainActor and read from the
+    /// persistence queue — so it carries its own lock.
+    var relayKey: RelayKey? {
+        get { relayKeyLock.lock(); defer { relayKeyLock.unlock() }; return _relayKey }
+        set { relayKeyLock.lock(); _relayKey = newValue; relayKeyLock.unlock() }
+    }
+
+    /// Sticky: set once we've seen a sealed envelope come back from the
+    /// relay. From then on a plaintext PUT would be a downgrade that
+    /// silently undoes encryption for every other device, so we refuse to
+    /// push at all while the key is unavailable. Persisted so the refusal
+    /// survives a relaunch with a locked keychain.
+    /// Internal rather than private so tests can arm and reset it; it's
+    /// process-wide state (one relay doc per install), not per-instance.
+    var relayIsEncrypted: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.relayEncryptedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.relayEncryptedKey) }
+    }
+    private static let relayEncryptedKey = "todarchy.sync.relayEncrypted"
+
+    /// Whether we've completed a GET against the relay this launch, so we
+    /// know whether it's holding ciphertext. Until then a plaintext PUT
+    /// would be a guess — and on a locked device that first guess is
+    /// exactly the downgrade `relayIsEncrypted` exists to prevent, fired
+    /// before the flag has had a chance to arm. Queue-confined; per-launch
+    /// rather than persisted, so a format change is always re-observed.
+    private var relayProbed = false
+
+    /// True while a `ServerPull` batch is awaiting the network. Queue-
+    /// confined. Coalesces the 10 s poll: if a relay round-trip outlives
+    /// its tick, the next tick does its local disk work and skips the
+    /// network rather than stacking a second batch on top.
+    private var pullInFlight = false
 
     /// iOS security-scope URL. MUST be the exact URL instance that was
     /// granted scope (from `.fileImporter` or `resolvingBookmarkData`), not
@@ -371,10 +419,15 @@ final class TaskStorePersistence {
             _ = mergeOrRebuild(onDisk)
         }
 
-        // 1b. In server mode, pull the latest bytes from the relay and
-        //     merge them in. Synchronous on this queue so that the
-        //     upcoming write incorporates peer changes from the server.
-        pullMainFromServerSync()
+        // 1b. No relay pull here, on purpose. This is the debounced
+        //     save path — it runs while the user is typing — and awaiting
+        //     a round-trip with the serial queue held is precisely what
+        //     froze the UI on bad service. The relay's copy is merged by
+        //     `applyRefresh` on the 10 s poll and by `syncNow`. Nothing is
+        //     lost by not merging first: PUT is unconditional ("local
+        //     always wins"), so a push that races a peer is reconciled on
+        //     the next tick — every peer re-pushes its own doc each poll,
+        //     and Automerge makes the re-merge convergent, not lossy.
 
         // 2. Pull in any conflict copies the sync daemon created.
         ingestConflictCopies()
@@ -396,12 +449,11 @@ final class TaskStorePersistence {
         //    local mutations, so we're merging into the freshest state.
         //    Also sweep up any conflict copies the sync daemon left
         //    behind — same contract as the main-doc ingestion above
-        //    but per-shared-file. In server mode, pull the envelope
-        //    bytes from the relay too.
-        for (pid, store) in sharedStores {
+        //    but per-shared-file. Relay envelopes are pulled by the poll,
+        //    not here — see 1b.
+        for (_, store) in sharedStores {
             _ = store.refreshFromDisk()
             _ = store.ingestConflictCopies()
-            pullSharedFromServerSync(projectId: pid, store: store)
         }
 
         // 5. Split the pending snapshot by destination. A task lives
@@ -427,6 +479,9 @@ final class TaskStorePersistence {
             try automerge.upsertProjects(snap.projects)
             if let contexts = snap.contexts {
                 try automerge.writeContexts(contexts)
+            }
+            if let retired = snap.retiredContexts {
+                try automerge.writeRetiredContexts(retired)
             }
             for id in mainDeletes { try automerge.deleteTask(id) }
             for id in projectDeletes { try automerge.deleteProject(id) }
@@ -479,101 +534,297 @@ final class TaskStorePersistence {
 
     // MARK: - Server mirror
 
-    /// Start an async pull of the main doc from the relay. When bytes
-    /// come back we hop back to `queue` to merge them into the live doc
-    /// and notify the UI. Non-blocking — the persistence queue keeps
-    /// processing user mutations while the network round-trip is in
-    /// flight. Safe to call on any thread; no-op outside server mode.
+    /// Bytes fetched from the relay in one batch, gathered **off** the
+    /// persistence queue and merged onto it by `applyPull`.
     ///
-    /// The user's "always overwrite the server" semantics mean we
-    /// don't need to *wait* for a pre-write merge: peer changes are
-    /// picked up on the next poll / refresh and will converge via
-    /// Automerge, since the CRDT makes every pull idempotent.
-    private func pullMainFromServerSync() {
-        guard let client = serverClient, let id = serverMainDocId else { return }
-        let semaphore = DispatchSemaphore(value: 0)
-        let result = PullBox()
+    /// Splitting the pull in two like this is load-bearing. `queue` is
+    /// serial and main-thread reads go through it (`load()` -> `onQueue`
+    /// -> `queue.sync`), so whatever the queue is busy with back-pressures
+    /// onto the UI. The pull used to await its round-trip *while holding
+    /// the queue*, which froze the app for the length of that wait x
+    /// (1 + sharedStores.count) whenever the relay was slow — the
+    /// "spontaneously hangs on bad service" report. Nothing in the fetch
+    /// path touches queue-confined state, so it can be awaited from any
+    /// thread; the queue is only taken for the CPU-bound Automerge merge.
+    private struct ServerPull {
+        /// True when a round-trip was actually attempted, i.e. server mode
+        /// is on. Health / diagnostics are only updated when it is.
+        var attempted: Bool = false
+        var mainBytes: Data? = nil
+        var sharedBytes: [String: Data] = [:]
+        /// `localizedDescription` of a failed main-doc GET, if any. Kept as
+        /// a string rather than an `Error` so the value stays Sendable.
+        var errorMessage: String? = nil
+    }
 
-        Task.detached(priority: .userInitiated) { [result] in
-            do {
-                if let response = try await client.get(id) {
-                    result.bytes = response.0
+    /// Everything a pull batch needs, captured on `queue` so the network
+    /// side never reads mutable persistence state.
+    private struct PullRequest: Sendable {
+        let client: ServerSyncClient
+        let mainDocId: String?
+        let sharedIds: [String]
+    }
+
+    /// Round-trip budget for one batch. Same 5 s the old semaphore-based
+    /// pull allowed; URLSession's own 30 s request timeout is far too long
+    /// to leave the 10 s poll cadence waiting on.
+    private static let pullTimeout: TimeInterval = 5
+
+    /// Snapshot the inputs for a pull. Queue-confined — reads
+    /// `serverClient` / `serverMainDocId` / `sharedStores`. `nil` outside
+    /// server mode.
+    ///
+    /// Shared ids come from the *opened* stores, so a project that only
+    /// becomes shared later in this same tick first pulls on the next one.
+    /// That's a <=10 s delay on a freshly accepted invite, and its local
+    /// cache file is still read in the meantime.
+    private func makePullRequest() -> PullRequest? {
+        guard let client = serverClient else { return nil }
+        return PullRequest(client: client,
+                           mainDocId: serverMainDocId,
+                           sharedIds: Array(sharedStores.keys))
+    }
+
+    /// Run the GETs for one batch — main doc and shared envelopes in
+    /// parallel. Pure network, no `self`: safe to await from anywhere.
+    private static func fetch(_ req: PullRequest) async -> ServerPull {
+        let work: @Sendable () async -> ServerPull = {
+            var pull = ServerPull()
+            pull.attempted = true
+            // Tuple is (sharedProjectId | nil for the main doc, bytes, failure).
+            await withTaskGroup(of: (String?, Data?, String?).self) { group in
+                if let mainDocId = req.mainDocId {
+                    group.addTask {
+                        do { return (nil, try await req.client.get(mainDocId)?.0, nil) }
+                        catch { return (nil, nil, error.localizedDescription) }
+                    }
                 }
-            } catch {
-                result.error = error
+                for pid in req.sharedIds {
+                    group.addTask {
+                        do { return (pid, try await req.client.get(pid)?.0, nil) }
+                        catch { return (pid, nil, error.localizedDescription) }
+                    }
+                }
+                for await (pid, bytes, failure) in group {
+                    guard let pid else {
+                        // Main doc: a nil `bytes` with no failure is a 304.
+                        pull.mainBytes = bytes
+                        pull.errorMessage = failure
+                        continue
+                    }
+                    if let bytes { pull.sharedBytes[pid] = bytes }
+                    #if DEBUG
+                    if let failure { print("todarchy: server GET \(pid) failed: \(failure)") }
+                    #endif
+                }
             }
-            semaphore.signal()
+            return pull
         }
 
-        // Block the persistence queue until the round-trip completes
-        // (or the timeout fires). This is load-bearing: the caller —
-        // typically `flushNow` — is about to write its local state to
-        // disk + push it to the relay. If we don't merge peer changes
-        // first, we'll overwrite whatever a peer just pushed.
-        // Timeout keeps the queue from stalling on a dead server; 5 s
-        // is generous for a healthy relay round-trip.
-        _ = semaphore.wait(timeout: .now() + 5)
-
-        if let bytes = result.bytes {
-            _ = mergeOrRebuild(bytes)
-            DispatchQueue.main.async {
-                SyncSettings.shared.markServerHealth(.ok)
-                // markMerged was historically only called from the
-                // manual Sync Now button — so the diagnostics
-                // "last merged" line stuck at whenever the user
-                // last tapped Refresh, even though the 10 s poll
-                // had been pulling cleanly the whole time. Recording
-                // it here gives an honest "auto-sync is alive"
-                // signal in the diagnostics view.
-                SyncSettings.shared.markMerged()
+        // Race the batch against the deadline so one wedged connection
+        // can't hold the poll cadence hostage.
+        return await withTaskGroup(of: ServerPull?.self) { group in
+            group.addTask { await work() }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(Self.pullTimeout * 1_000_000_000))
+                return nil
             }
-        } else if let error = result.error {
-            DispatchQueue.main.async {
-                SyncSettings.shared.markServerHealth(.failing(error.localizedDescription))
-            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? ServerPull(
+                attempted: true,
+                errorMessage: "Server didn't respond within \(Int(Self.pullTimeout))s"
+            )
         }
     }
 
-    /// Synchronous pull of a shared-project envelope. Same blocking
-    /// semantics + same rationale as `pullMainFromServerSync` — peer
-    /// changes to the shared store have to land before we push or
-    /// they get clobbered.
-    private func pullSharedFromServerSync(projectId: String, store: PerProjectStore) {
-        guard let client = serverClient else { return }
-        let semaphore = DispatchSemaphore(value: 0)
-        let result = PullBox()
+    // MARK: - Relay payload encryption
 
-        Task.detached(priority: .userInitiated) { [result] in
-            do {
-                if let response = try await client.get(projectId) {
-                    result.bytes = response.0
-                }
-            } catch {
-                result.error = error
+    /// Seal `bytes` for the relay, or return them unchanged when this
+    /// user has no passphrase set up. Returns `nil` to mean "don't push
+    /// at all".
+    ///
+    /// Only the relay copy is encrypted. The local `tasks.automerge` stays
+    /// plaintext: it's already behind FileVault and the app sandbox, and
+    /// the MCP server and the `todokase` CLI both read it without a key.
+    /// The relay is the untrusted party here, not the disk.
+    private func sealForRelay(_ bytes: Data) -> Data? {
+        guard let relay = relayKey else {
+            if relayIsEncrypted {
+                // Refusing beats downgrading: pushing plaintext here would
+                // strip encryption for every other device on this doc.
+                reportServerHealth(.failing(
+                    "Relay data is encrypted but the passphrase is locked on this device — enter it to resume syncing."
+                ))
+                return nil
             }
-            semaphore.signal()
+            guard relayProbed else {
+                // Haven't read the relay yet this launch, so we don't know
+                // whether it's encrypted. Say nothing and wait: the poll
+                // will probe within ~10 s and push then. Not a failure
+                // state, so the health indicator stays as it was.
+                return nil
+            }
+            // No passphrase has ever been set, and the relay is in the
+            // clear too. Keep syncing rather than silently stranding the
+            // user; `SyncSettings` surfaces this so it isn't a quiet
+            // fail-open.
+            return bytes
         }
+        do {
+            let sealed = try CryptoBox.seal(bytes, with: relay.key, salt: relay.salt)
+            relayIsEncrypted = true
+            return sealed
+        } catch {
+            reportServerHealth(.failing("Couldn't encrypt for the relay: \(error.localizedDescription)"))
+            return nil
+        }
+    }
 
-        _ = semaphore.wait(timeout: .now() + 5)
+    /// What came back from the relay.
+    private enum RelayPayload {
+        /// Plaintext Automerge bytes, ready to merge.
+        case plain(Data)
+        /// A sealed envelope we can't open — no key, or the wrong one.
+        /// Carries the v2 salt when present so the UI can prompt for the
+        /// passphrase and derive against it.
+        case locked(salt: Data?)
+        /// Neither an envelope nor a parseable Automerge doc.
+        case unreadable
+    }
 
-        if let bytes = result.bytes {
+    /// Interpret bytes fetched from the relay, tolerating the pre-
+    /// encryption format. **Must run on `queue`.**
+    private func decodeRelayPayload(_ bytes: Data) -> RelayPayload {
+        guard CryptoBox.isEnvelope(bytes) else {
+            // Legacy plaintext, written by a build from before relay
+            // encryption. Merge it; the write-back at the end of this
+            // cycle re-uploads the same content sealed.
+            return AutomergeStore.isDocument(bytes) ? .plain(bytes) : .unreadable
+        }
+        // Seeing ciphertext is what arms the no-downgrade rule, whether or
+        // not we can actually open it.
+        relayIsEncrypted = true
+        guard let relay = relayKey,
+              let plain = try? CryptoBox.open(bytes, with: relay.key) else {
+            return .locked(salt: CryptoBox.salt(in: bytes))
+        }
+        return AutomergeStore.isDocument(plain) ? .plain(plain) : .unreadable
+    }
+
+    private func reportServerHealth(_ health: SyncSettings.ServerHealth) {
+        DispatchQueue.main.async {
+            SyncSettings.shared.markServerHealth(health)
+        }
+    }
+
+    /// Merge a completed batch into the live docs and refresh the sync
+    /// health indicators. **Must run on `queue`.** Returns true if any
+    /// bytes were actually merged.
+    @discardableResult
+    private func applyPull(_ pull: ServerPull) -> Bool {
+        var merged = false
+        var blocked: String?
+        if let bytes = pull.mainBytes {
+            switch decodeRelayPayload(bytes) {
+            case .plain(let plain):
+                _ = mergeOrRebuild(plain)
+                merged = true
+            case .locked(let salt):
+                if let salt {
+                    DispatchQueue.main.async {
+                        SyncSettings.shared.noteRelayEnvelopeSalt(salt)
+                    }
+                }
+                blocked = "Relay data is encrypted — enter your passphrase to sync this device."
+            case .unreadable:
+                blocked = "The relay returned bytes this build can't read."
+            }
+        }
+        // Shared-project envelopes are already sealed under their own
+        // per-project key by `PerProjectStore`, so they need no handling
+        // here — they were never plaintext on the relay.
+        for (pid, bytes) in pull.sharedBytes {
+            guard let store = sharedStores[pid] else { continue }
             _ = store.merge(encryptedBytes: bytes)
-        } else if let error = result.error {
-            #if DEBUG
-            print("todarchy: server GET \(projectId) failed: \(error.localizedDescription)")
-            #endif
+            merged = true
         }
+        guard pull.attempted else { return merged }
+        // A completed round-trip — including a 404 "no doc yet" and a 304
+        // "unchanged" — tells us the relay's format. `blocked` doesn't
+        // disqualify it: we read the bytes, we just couldn't use them.
+        if pull.errorMessage == nil { relayProbed = true }
+        let failure = pull.errorMessage ?? blocked
+        let didMerge = merged
+        DispatchQueue.main.async {
+            guard let failure else {
+                SyncSettings.shared.markServerHealth(.ok)
+                // markMerged was historically only called from the manual
+                // Sync Now button — so the diagnostics "last merged" line
+                // stuck at whenever the user last tapped Refresh, even
+                // though the poll had been pulling cleanly the whole time.
+                // Recording it here gives an honest "auto-sync is alive"
+                // signal. Gated on an actual merge: a 304 means "nothing
+                // new", and claiming a merge then would be a lie.
+                if didMerge { SyncSettings.shared.markMerged() }
+                return
+            }
+            SyncSettings.shared.markServerHealth(.failing(failure))
+        }
+        return merged
     }
 
-    /// Mutable box for shuttling a network response from a detached
-    /// `Task` back to the persistence queue, paired with a
-    /// `DispatchSemaphore`. The semaphore's signal/wait pair is what
-    /// gives us the happens-before relationship that makes mutating
-    /// these fields from the Task and reading them after `wait` safe
-    /// without an explicit lock.
-    private final class PullBox: @unchecked Sendable {
-        var bytes: Data?
-        var error: Error?
+    /// Kick off a pull batch; `completion` runs on `queue` once the bytes
+    /// are in hand. Returns false — having done nothing — outside server
+    /// mode or when a batch is already in flight, in which case the caller
+    /// should just get on with its local work.
+    ///
+    /// **Must be called from `queue`.**
+    private func startPull(_ completion: @escaping (ServerPull) -> Void) -> Bool {
+        guard !pullInFlight, let req = makePullRequest() else { return false }
+        pullInFlight = true
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let pull = await Self.fetch(req)
+            guard let self else { return }
+            self.queue.async {
+                self.pullInFlight = false
+                completion(pull)
+            }
+        }
+        return true
+    }
+
+    /// Run a pull batch to completion on the CALLING thread, for the one
+    /// caller that needs a synchronous answer (`syncNow`).
+    ///
+    /// Never call this from the main thread or from `queue` — either would
+    /// reintroduce the stall this split exists to remove — so those
+    /// callers get an empty pull and pick peer changes up on the next poll
+    /// instead. All three real `syncNow` call sites already hop to a
+    /// background thread via `Task.detached`.
+    private func blockingPull() -> ServerPull {
+        guard !Thread.isMainThread,
+              DispatchQueue.getSpecific(key: Self.queueKey) != queueID,
+              let req = onQueue({ makePullRequest() }) else { return ServerPull() }
+        let box = PullResultBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached(priority: .userInitiated) { [box] in
+            box.value = await TaskStorePersistence.fetch(req)
+            semaphore.signal()
+        }
+        // Unbounded wait: `fetch` carries its own deadline. The old code
+        // put the timeout on the semaphore instead, which left an
+        // abandoned task still writing into a box we had already read.
+        semaphore.wait()
+        return box.value ?? ServerPull()
+    }
+
+    /// Mutable box for shuttling a network response back to the caller of
+    /// `blockingPull`. The semaphore's signal/wait pair supplies the
+    /// happens-before relationship that makes writing from the task and
+    /// reading after `wait` safe without an explicit lock.
+    private final class PullResultBox: @unchecked Sendable {
+        var value: ServerPull?
     }
 
     /// Push the given main-doc bytes to the relay. Unconditional PUT —
@@ -582,9 +833,10 @@ final class TaskStorePersistence {
     /// network round-trip. Errors surface on `SyncSettings.serverHealth`.
     private func pushMainToServer(_ bytes: Data) {
         guard let client = serverClient, let id = serverMainDocId else { return }
+        guard let payload = sealForRelay(bytes) else { return }
         Task.detached(priority: .utility) {
             do {
-                _ = try await client.put(id, bytes)
+                _ = try await client.put(id, payload)
                 await MainActor.run {
                     SyncSettings.shared.markServerHealth(.ok)
                 }
@@ -671,66 +923,77 @@ final class TaskStorePersistence {
     ///
     /// Fire-and-forget: dispatches the (potentially blocking) work to
     /// the persistence queue via `queue.async`. **Must not** become
-    /// `queue.sync` — the synchronous server pulls inside this body
-    /// can each block ~5 s on bad networks, and any sync dispatch
-    /// from the main thread would freeze the UI for that duration ×
-    /// (1 + sharedStores.count). Callers that need to observe the
+    /// `queue.sync` — the local half still does disk I/O that can stall
+    /// on a file provider, and a sync dispatch from the main thread would
+    /// freeze the UI for that long. Callers that need to observe the
     /// outcome should listen on `onExternalChange`.
+    ///
+    /// The relay round-trip happens *before* the queue work, off-queue —
+    /// see `ServerPull`.
     func refreshFromDisk() {
         queue.async { [weak self] in
             guard let self else { return }
-            // If a local mutation is queued for the debounced save,
-            // promote this refresh into a full flush. The bare
-            // pull/merge/notify path below would otherwise reload
-            // the UI from a doc that doesn't yet contain the
-            // pending mutation — so a freshly-completed task
-            // visibly comes back until flushNow runs (up to 5 s if
-            // the server pull hits its timeout). flushNow already
-            // does its own server pull, so nothing is lost by
-            // routing through it.
-            if self.pendingSnapshot != nil {
-                self.flushNow()
-                return
+            let started = self.startPull { [weak self] pull in
+                self?.applyRefresh(pull: pull)
             }
-            // Pull from the server first so disk + server state reconcile
-            // in one merge pass.
-            self.pullMainFromServerSync()
-            if FileManager.default.fileExists(atPath: fileURL.path),
-               let bytes = readBytes(from: fileURL) {
-                _ = mergeOrRebuild(bytes)
+            // Local-only mode, or a slow batch already outliving its tick:
+            // do the disk half now instead of stacking network work.
+            if !started {
+                self.applyRefresh(pull: ServerPull())
             }
-            ingestConflictCopies()
+        }
+    }
 
-            // After the main doc reconciles, adopt any share keys peers
-            // published — same as in flushNow's step 2b. Hops to the
-            // MainActor because adopt touches `MasterKey`.
-            adoptShareKeysFromDoc()
+    /// Queue-confined body of `refreshFromDisk`, run once the (possibly
+    /// empty) server pull is in hand.
+    private func applyRefresh(pull: ServerPull) {
+        // Merge the relay's bytes first so disk + server state reconcile
+        // in one pass.
+        applyPull(pull)
 
-            // Now that the main doc is current, open any newly shared
-            // projects and pull each store's envelope bytes from both
-            // disk and the server.
-            if let snap = try? automerge.snapshot() {
-                refreshSharedStores(mainProjects: snap.projects)
-            }
-            for (pid, store) in sharedStores {
-                _ = store.refreshFromDisk()
-                _ = store.ingestConflictCopies()
-                pullSharedFromServerSync(projectId: pid, store: store)
-            }
+        // If a local mutation is queued for the debounced save, promote
+        // this refresh into a full flush. The bare merge/notify path below
+        // would otherwise reload the UI from a doc that doesn't yet
+        // contain the pending mutation — so a freshly-completed task
+        // visibly comes back until flushNow runs. The pull above is
+        // already merged in, so nothing is lost by routing through it.
+        if pendingSnapshot != nil {
+            flushNow()
+            return
+        }
+        if FileManager.default.fileExists(atPath: fileURL.path),
+           let bytes = readBytes(from: fileURL) {
+            _ = mergeOrRebuild(bytes)
+        }
+        ingestConflictCopies()
 
-            // Always write back — this resolves conflict copies on disk.
-            var mainBytesForServer: Data?
-            _ = self.retryOnPoison {
-                let b = self.automerge.save()
-                try self.writeBytes(b)
-                mainBytesForServer = b
-            }
-            if let b = mainBytesForServer {
-                self.pushMainToServer(b)
-            }
-            DispatchQueue.main.async { [weak self] in
-                self?.onExternalChange?()
-            }
+        // After the main doc reconciles, adopt any share keys peers
+        // published — same as in flushNow's step 2b. Hops to the
+        // MainActor because adopt touches `MasterKey`.
+        adoptShareKeysFromDoc()
+
+        // Now that the main doc is current, open any newly shared
+        // projects and reconcile each store against its local file.
+        if let snap = try? automerge.snapshot() {
+            refreshSharedStores(mainProjects: snap.projects)
+        }
+        for (_, store) in sharedStores {
+            _ = store.refreshFromDisk()
+            _ = store.ingestConflictCopies()
+        }
+
+        // Always write back — this resolves conflict copies on disk.
+        var mainBytesForServer: Data?
+        _ = retryOnPoison {
+            let b = automerge.save()
+            try writeBytes(b)
+            mainBytesForServer = b
+        }
+        if let b = mainBytesForServer {
+            pushMainToServer(b)
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.onExternalChange?()
         }
     }
 
@@ -800,17 +1063,19 @@ final class TaskStorePersistence {
     /// returns the count of tasks present after the sync for UI feedback.
     @discardableResult
     func syncNow() -> SyncResult {
-        onQueue {
+        // Server-mode pull before we take the queue — if the user just
+        // enabled server mode we may not have any local file yet, but
+        // remote state should still come through. Doing it out here keeps
+        // the round-trip off the serial queue, which main-thread `load()`
+        // calls are waiting on.
+        let pull = blockingPull()
+        return onQueue {
             if pendingSnapshot != nil {
                 flushNow()
             }
-            // Server-mode pull before we inspect the local file — if the
-            // user just enabled server mode we may not have any local
-            // file yet, but remote state should still come through.
-            pullMainFromServerSync()
-            for (pid, store) in sharedStores {
+            applyPull(pull)
+            for (_, store) in sharedStores {
                 _ = store.refreshFromDisk()
-                pullSharedFromServerSync(projectId: pid, store: store)
             }
             guard FileManager.default.fileExists(atPath: fileURL.path) else {
                 // With server mode active, we may have merged remote bytes
@@ -1076,11 +1341,18 @@ final class TaskStorePersistence {
                     bytesForServer = b
                 }
             }
-            // If we just switched into a server-backed mode, mirror our
-            // current local bytes to the relay so the remote catches up
-            // to the state we're carrying forward.
-            if !replaceLocalDoc, let b = bytesForServer {
-                pushMainToServer(b)
+            // If we just switched into a server-backed mode, reconcile with
+            // the relay so the remote catches up to the state we're
+            // carrying forward.
+            //
+            // This goes through a full refresh rather than a bare push. We
+            // have never read this relay, so we don't yet know whether it's
+            // holding ciphertext — and a blind plaintext PUT is exactly the
+            // downgrade `sealForRelay` refuses. `refreshFromDisk` pulls
+            // first, which both answers that question and merges whatever a
+            // peer already put there, then pushes the merged result.
+            if !replaceLocalDoc, bytesForServer != nil, serverClient != nil {
+                refreshFromDisk()
             }
             startWatching()
             // Keep the poll timer in sync with the server-client presence.

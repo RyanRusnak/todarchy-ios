@@ -211,3 +211,222 @@ private extension MockURLProtocol {
         return data
     }
 }
+
+/// The main doc used to leave the device as plaintext Automerge bytes —
+/// `automerge.save()` went straight to `client.put`, so the relay held
+/// readable titles, notes and comments for every non-shared project. Only
+/// per-project shared files were ever sealed. These pin the fix: the relay
+/// copy is sealed under the passphrase-derived master key, the pre-
+/// encryption format still reads, and a device that can't decrypt refuses
+/// to push plaintext back over ciphertext.
+@MainActor
+final class RelayEncryptionTests: XCTestCase {
+    var tmpDir: URL!
+    let baseURL = URL(string: "https://mock.example.com")!
+    let docId = "main_crypto"
+
+    /// A stand-in for the passphrase-derived master key.
+    let relay = TaskStorePersistence.RelayKey(
+        key: CryptoBox.generateKey(),
+        salt: Data(repeating: 0x5A, count: 16)
+    )
+
+    override func setUp() async throws {
+        MockURLProtocol.reset()
+        tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("todarchy-relaycrypto-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        // Sticky no-downgrade flag is process-wide; start every case clean.
+        UserDefaults.standard.set(false, forKey: "todarchy.sync.relayEncrypted")
+    }
+
+    override func tearDown() async throws {
+        MockURLProtocol.reset()
+        UserDefaults.standard.set(false, forKey: "todarchy.sync.relayEncrypted")
+        _ = try? FileManager.default.removeItem(at: tmpDir)
+    }
+
+    private func makePersistence() -> TaskStorePersistence {
+        let p = TaskStorePersistence(fileURL: tmpDir.appendingPathComponent("tasks.automerge"))
+        p.serverClient = ServerSyncClient(baseURL: baseURL, session: MockURLProtocol.makeSession())
+        p.serverMainDocId = docId
+        return p
+    }
+
+    /// Bytes a peer would be holding, as raw Automerge.
+    private func peerDocBytes(title: String) throws -> Data {
+        let peer = AutomergeStore(data: nil)
+        try peer.upsertTasks([TaskItem(list: "inbox", title: title, pos: Date())])
+        return peer.save()
+    }
+
+    private func stubGet(_ response: @escaping () -> MockResponse) {
+        MockURLProtocol.stub(path: "/doc/\(docId)", method: "GET") { _ in response() }
+    }
+
+    // MARK: - Push
+
+    func testMainDocIsSealedBeforeItReachesTheRelay() async throws {
+        let put = expectation(description: "PUT")
+        put.assertForOverFulfill = false
+        let body = BodyBox()
+        stubGet { MockResponse(status: 404, headers: [:], body: Data()) }
+        MockURLProtocol.stub(path: "/doc/\(docId)", method: "PUT") { request in
+            body.data = request.httpBody ?? MockURLProtocol.streamedBody(from: request)
+            put.fulfill()
+            return MockResponse(status: 204, headers: ["ETag": "\"v1\""], body: Data())
+        }
+
+        let p = makePersistence()
+        p.relayKey = relay
+        p.saveNow(.init(tasks: [TaskItem(list: "inbox", title: "buy-plutonium", pos: Date())],
+                        projects: []))
+        await fulfillment(of: [put], timeout: 5)
+
+        let uploaded = try XCTUnwrap(body.data)
+        XCTAssertTrue(CryptoBox.isEnvelope(uploaded), "Relay payload must be a sealed envelope.")
+        XCTAssertNil(uploaded.range(of: Data("buy-plutonium".utf8)),
+                     "Task titles must not be readable in the bytes the relay stores.")
+        XCTAssertEqual(CryptoBox.salt(in: uploaded), relay.salt,
+                       "The KDF salt rides in the clear header so other devices can re-derive.")
+
+        let opened = try CryptoBox.open(uploaded, with: relay.key)
+        let snap = try AutomergeStore(data: opened).snapshot()
+        XCTAssertTrue(snap.tasks.contains { $0.title == "buy-plutonium" })
+    }
+
+    func testWithoutAPassphraseBytesStillGoUpInTheClear() async throws {
+        // No master key and a relay that has never held ciphertext: keep
+        // syncing rather than stranding the user. The UI reports this as
+        // "relay encryption OFF" so it isn't a quiet fail-open.
+        let put = expectation(description: "PUT")
+        put.assertForOverFulfill = false
+        let body = BodyBox()
+        stubGet { MockResponse(status: 404, headers: [:], body: Data()) }
+        MockURLProtocol.stub(path: "/doc/\(docId)", method: "PUT") { request in
+            body.data = request.httpBody ?? MockURLProtocol.streamedBody(from: request)
+            put.fulfill()
+            return MockResponse(status: 204, headers: ["ETag": "\"v1\""], body: Data())
+        }
+
+        let p = makePersistence()
+        p.relayKey = nil
+        p.saveNow(.init(tasks: [TaskItem(list: "inbox", title: "plain", pos: Date())],
+                        projects: []))
+        // The relay's format is unknown until a GET completes, so the
+        // write-back after this refresh is the first upload.
+        p.refreshFromDisk()
+        await fulfillment(of: [put], timeout: 5)
+
+        let uploaded = try XCTUnwrap(body.data)
+        XCTAssertFalse(CryptoBox.isEnvelope(uploaded))
+        XCTAssertTrue(AutomergeStore.isDocument(uploaded))
+    }
+
+    // MARK: - Pull
+
+    func testSealedBytesFromTheRelayAreOpenedAndMerged() async throws {
+        let sealed = try CryptoBox.seal(try peerDocBytes(title: "from-peer"),
+                                        with: relay.key, salt: relay.salt)
+        stubGet { MockResponse(status: 200, headers: ["ETag": "\"v1\""], body: sealed) }
+        MockURLProtocol.stub(path: "/doc/\(docId)", method: "PUT") { _ in
+            MockResponse(status: 204, headers: ["ETag": "\"v2\""], body: Data())
+        }
+
+        let p = makePersistence()
+        p.relayKey = relay
+        try await expectMerge(p, title: "from-peer")
+    }
+
+    func testLegacyPlaintextFromTheRelayStillMerges() async throws {
+        // Upgrade path: the relay is still holding what an older build put
+        // there. Merge it, then the write-back re-uploads it sealed.
+        stubGet { [self] in
+            MockResponse(status: 200, headers: ["ETag": "\"v1\""],
+                         body: (try? peerDocBytes(title: "legacy-peer")) ?? Data())
+        }
+        MockURLProtocol.stub(path: "/doc/\(docId)", method: "PUT") { _ in
+            MockResponse(status: 204, headers: ["ETag": "\"v2\""], body: Data())
+        }
+
+        let p = makePersistence()
+        p.relayKey = relay
+        try await expectMerge(p, title: "legacy-peer")
+    }
+
+    func testLockedDeviceRefusesToPushPlaintextOverCiphertext() async throws {
+        // A device without the passphrase must not "helpfully" overwrite
+        // the relay's ciphertext with its own readable bytes — that would
+        // silently strip encryption for every other device on the doc.
+        let sealed = try CryptoBox.seal(try peerDocBytes(title: "unreadable"),
+                                        with: CryptoBox.generateKey(),
+                                        salt: Data(repeating: 9, count: 16))
+        let get = expectation(description: "GET")
+        get.assertForOverFulfill = false
+        stubGet { get.fulfill(); return MockResponse(status: 200, headers: ["ETag": "\"v1\""], body: sealed) }
+
+        let noPut = expectation(description: "no PUT while locked")
+        noPut.isInverted = true
+        MockURLProtocol.stub(path: "/doc/\(docId)", method: "PUT") { _ in
+            noPut.fulfill()
+            return MockResponse(status: 204, headers: ["ETag": "\"v2\""], body: Data())
+        }
+
+        let p = makePersistence()
+        p.relayKey = nil        // locked: no passphrase on this device
+        // Save first: this is the dangerous ordering — a local mutation
+        // racing ahead of the device's first read of the relay.
+        p.saveNow(.init(tasks: [TaskItem(list: "inbox", title: "local-secret", pos: Date())],
+                        projects: []))
+        p.refreshFromDisk()
+
+        await fulfillment(of: [get], timeout: 5)
+        await fulfillment(of: [noPut], timeout: 2)
+        XCTAssertTrue(p.relayIsEncrypted, "Seeing ciphertext arms the no-downgrade rule.")
+        XCTAssertTrue(p.load()?.tasks.contains { $0.title == "local-secret" } ?? false,
+                      "Local state must survive being unable to read the relay.")
+    }
+
+    func testUnreadableRelayBytesAreNotMerged() async throws {
+        // AutomergeStore(data:) substitutes the empty seed for junk bytes,
+        // so merging without checking quietly folds that seed into the
+        // live doc. Refuse instead.
+        stubGet { MockResponse(status: 200, headers: ["ETag": "\"v1\""],
+                               body: Data(repeating: 0x7F, count: 512)) }
+        MockURLProtocol.stub(path: "/doc/\(docId)", method: "PUT") { _ in
+            MockResponse(status: 204, headers: ["ETag": "\"v2\""], body: Data())
+        }
+
+        let p = makePersistence()
+        p.relayKey = relay
+        p.saveNow(.init(tasks: [TaskItem(list: "inbox", title: "mine", pos: Date())], projects: []))
+        let before = p.load()?.tasks.count ?? 0
+
+        let settled = expectation(description: "refresh settled")
+        settled.assertForOverFulfill = false
+        p.onExternalChange = { settled.fulfill() }
+        p.refreshFromDisk()
+        await fulfillment(of: [settled], timeout: 5)
+
+        XCTAssertEqual(p.load()?.tasks.count, before,
+                       "Junk from the relay must not change the local doc.")
+        XCTAssertTrue(p.load()?.tasks.contains { $0.title == "mine" } ?? false)
+    }
+
+    // MARK: - Helpers
+
+    private func expectMerge(_ p: TaskStorePersistence, title: String) async throws {
+        let merged = expectation(description: "merged \(title)")
+        merged.assertForOverFulfill = false
+        p.onExternalChange = { [weak p] in
+            if p?.load()?.tasks.contains(where: { $0.title == title }) == true { merged.fulfill() }
+        }
+        p.refreshFromDisk()
+        await fulfillment(of: [merged], timeout: 10)
+    }
+}
+
+/// Captures a request body from the mock protocol's thread.
+private final class BodyBox: @unchecked Sendable {
+    var data: Data?
+}

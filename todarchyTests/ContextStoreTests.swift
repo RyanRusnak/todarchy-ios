@@ -142,4 +142,112 @@ final class ContextStoreTests: XCTestCase {
         _ = store.add(raw: "do thing @work", list: "inbox")
         XCTAssertEqual(store.contexts.count, countBefore)
     }
+
+    // MARK: - Adoption of contexts arriving on synced tasks
+    //
+    // Quick-add registers the `@token` it parses, but tasks authored
+    // elsewhere — the Linux app, the web app, the MCP server — never go
+    // through that path, so their contexts were invisible on this machine
+    // and the chip lists drifted apart. Adoption makes the list a function
+    // of the doc instead of of where a task happened to be typed.
+
+    func testAdoptsContextArrivingOnATask() {
+        store.tasks = [TaskItem(list: "inbox", title: "ssh in",
+                                ctx: TaskContext(rawValue: "@linuxbox"))]
+        XCTAssertEqual(store.adoptContextsFromTasks(), [TaskContext(rawValue: "@linuxbox")])
+        XCTAssertTrue(store.contexts.contains(TaskContext(rawValue: "@linuxbox")))
+    }
+
+    func testAdoptionAppendsInASortedOrderAndIsIdempotent() {
+        store.tasks = [
+            TaskItem(list: "inbox", title: "a", ctx: TaskContext(rawValue: "@zed")),
+            TaskItem(list: "inbox", title: "b", ctx: TaskContext(rawValue: "@alpha")),
+            TaskItem(list: "inbox", title: "c", ctx: .work),
+        ]
+        XCTAssertEqual(store.adoptContextsFromTasks().map(\.rawValue), ["@alpha", "@zed"],
+                       "Deterministic order so two machines adopting the same batch converge on the same list.")
+        XCTAssertTrue(store.adoptContextsFromTasks().isEmpty,
+                      "Nothing left to adopt on a second pass.")
+    }
+
+    func testAdoptionDoesNotResurrectARemovedContext() {
+        let gym = store.addContext("gym")!
+        store.tasks = [TaskItem(list: "inbox", title: "lift", ctx: gym)]
+        store.removeContext(gym)
+        XCTAssertEqual(store.adoptContextsFromTasks(), [])
+        XCTAssertFalse(store.contexts.contains(gym),
+                       "A deliberate removal has to outlive adoption, even while tasks still carry the context.")
+        XCTAssertTrue(store.retiredContexts.contains(gym))
+    }
+
+    func testReAddingARemovedContextUnretiresIt() {
+        let gym = store.addContext("gym")!
+        store.tasks = [TaskItem(list: "inbox", title: "lift", ctx: gym)]
+        store.removeContext(gym)
+
+        XCTAssertEqual(store.addContext("gym"), gym)
+        XCTAssertTrue(store.contexts.contains(gym))
+        XCTAssertFalse(store.retiredContexts.contains(gym))
+        XCTAssertTrue(store.adoptContextsFromTasks().isEmpty)
+        XCTAssertTrue(store.contexts.contains(gym),
+                      "Once un-retired the context stays put.")
+    }
+
+    func testRenameUnretiresTheTargetName() {
+        let gym = store.addContext("gym")!
+        store.removeContext(gym)
+        let fitness = store.addContext("fitness")!
+        XCTAssertTrue(store.renameContext(from: fitness, to: "gym"))
+        XCTAssertFalse(store.retiredContexts.contains(gym),
+                       "Renaming onto a retired name is a deliberate re-introduction.")
+    }
+}
+
+/// Adoption has to round-trip through the Automerge doc, or the retirement
+/// list would only hold until the next launch.
+@MainActor
+final class ContextAdoptionPersistenceTests: XCTestCase {
+    var tmpURL: URL!
+
+    override func setUp() async throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("todarchy-ctxadopt-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        tmpURL = tmpDir.appendingPathComponent("tasks.automerge")
+    }
+
+    override func tearDown() async throws {
+        _ = try? FileManager.default.removeItem(at: tmpURL.deletingLastPathComponent())
+    }
+
+    func testLaunchAdoptsAContextThatOnlyExistsOnTasks() {
+        let p = TaskStorePersistence(fileURL: tmpURL)
+        // A doc as a peer would leave it: the task carries @server, but the
+        // contexts list was never told about it.
+        p.saveNow(.init(
+            tasks: [TaskItem(list: "inbox", title: "deploy",
+                             ctx: TaskContext(rawValue: "@server"), pos: Date())],
+            projects: [],
+            contexts: TaskContext.allCases
+        ))
+
+        let store = TaskStore(persistence: p)
+        XCTAssertTrue(store.contexts.contains(TaskContext(rawValue: "@server")),
+                      "A context that only exists on incoming tasks should join the list at launch.")
+    }
+
+    func testRemovalSurvivesAReload() {
+        let p = TaskStorePersistence(fileURL: tmpURL)
+        let store = TaskStore(persistence: p)
+        let gym = store.addContext("gym")!
+        _ = store.add(raw: "lift @gym", list: "inbox")
+        store.removeContext(gym)
+        p.saveNow(.init(tasks: store.tasks, projects: store.projects,
+                        contexts: store.contexts, retiredContexts: store.retiredContexts))
+
+        let reopened = TaskStore(persistence: p)
+        XCTAssertTrue(reopened.retiredContexts.contains(gym))
+        XCTAssertFalse(reopened.contexts.contains(gym),
+                       "Adoption at launch must not undo the removal.")
+    }
 }

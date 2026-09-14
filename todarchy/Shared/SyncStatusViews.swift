@@ -146,7 +146,7 @@ struct SyncExplanation: View {
                 .font(Typo.mono(11))
                 .foregroundStyle(Theme.fgMute)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Server: push encrypted bytes to a todokase relay. Share the same sync id across devices to sync; the server never sees plaintext.")
+            Text("Server: push tasks to a todokase relay. Share the same sync id across devices to sync. Set a passphrase to seal the bytes — the sync id is part of the URL, so it identifies your doc but never protects it.")
                 .font(Typo.mono(11))
                 .foregroundStyle(Theme.fgMute)
                 .fixedSize(horizontal: false, vertical: true)

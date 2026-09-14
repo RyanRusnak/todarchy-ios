@@ -182,3 +182,106 @@ final class MacSyncShortcutTests: XCTestCase {
     }
 }
 #endif
+
+
+/// The relay pull used to await its round-trip while holding the serial
+/// persistence queue. `load()` reaches that queue with `queue.sync` from
+/// the main thread, so a slow relay froze the UI for the length of the
+/// wait x (1 + sharedStores.count) — "the app spontaneously hangs when I
+/// have bad service". The fetch now runs off-queue and only the merge is
+/// queued, so these two properties have to hold together: the UI stays
+/// responsive *and* the bytes still land.
+@MainActor
+final class SlowServerPullTests: XCTestCase {
+    var tmpURL: URL!
+    let baseURL = URL(string: "https://mock.example.com")!
+
+    override func setUp() async throws {
+        MockURLProtocol.reset()
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("todarchy-slowpull-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        tmpURL = tmpDir.appendingPathComponent("tasks.automerge")
+    }
+
+    override func tearDown() async throws {
+        MockURLProtocol.reset()
+        _ = try? FileManager.default.removeItem(at: tmpURL.deletingLastPathComponent())
+    }
+
+    private func attachServer(_ p: TaskStorePersistence, docId: String) {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.protocolClasses = [MockURLProtocol.self]
+        p.serverClient = ServerSyncClient(baseURL: baseURL,
+                                          session: URLSession(configuration: cfg))
+        p.serverMainDocId = docId
+    }
+
+    func testLoadStaysResponsiveWhileAServerPullIsInFlight() async throws {
+        let p = TaskStorePersistence(fileURL: tmpURL)
+        p.saveNow(.init(tasks: [TaskItem(list: "inbox", title: "local", pos: Date())],
+                        projects: []))
+
+        let getIssued = expectation(description: "server GET issued")
+        MockURLProtocol.stub(path: "/doc/slow_main", method: "GET") { _ in
+            getIssued.fulfill()
+            // Stand in for a bad-service round-trip. Runs on the URLProtocol's
+            // own thread, so it can only stall the app if the persistence
+            // queue is waiting on it.
+            Thread.sleep(forTimeInterval: 2)
+            return MockResponse(status: 404, headers: [:], body: Data())
+        }
+        MockURLProtocol.stub(path: "/doc/slow_main", method: "PUT") { _ in
+            MockResponse(status: 204, headers: ["ETag": "\"v1\""], body: Data())
+        }
+        attachServer(p, docId: "slow_main")
+
+        p.refreshFromDisk()
+        await fulfillment(of: [getIssued], timeout: 5)
+
+        // The GET is still in flight. This is the exact call the UI makes.
+        let start = Date()
+        let snap = p.load()
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertNotNil(snap)
+        XCTAssertLessThan(elapsed, 1.0,
+                          "load() waited \(elapsed)s on an in-flight server pull — the persistence queue is being held across the network round-trip again")
+    }
+
+    func testPulledBytesStillMergeOnceTheSlowGetReturns() async throws {
+        let p = TaskStorePersistence(fileURL: tmpURL)
+        p.saveNow(.init(tasks: [TaskItem(list: "inbox", title: "local", pos: Date())],
+                        projects: []))
+
+        // What the relay is holding: a peer's doc with a task we don't have.
+        let peer = AutomergeStore(data: nil)
+        try peer.upsertTasks([TaskItem(list: "inbox", title: "from-peer", pos: Date())])
+        let peerBytes = peer.save()
+
+        MockURLProtocol.stub(path: "/doc/lag_main", method: "GET") { _ in
+            Thread.sleep(forTimeInterval: 0.5)
+            return MockResponse(status: 200, headers: ["ETag": "\"v1\""], body: peerBytes)
+        }
+        MockURLProtocol.stub(path: "/doc/lag_main", method: "PUT") { _ in
+            MockResponse(status: 204, headers: ["ETag": "\"v2\""], body: Data())
+        }
+        attachServer(p, docId: "lag_main")
+
+        let merged = expectation(description: "peer task merged into the local doc")
+        merged.assertForOverFulfill = false
+        p.onExternalChange = { [weak p] in
+            guard let p else { return }
+            if p.load()?.tasks.contains(where: { $0.title == "from-peer" }) == true {
+                merged.fulfill()
+            }
+        }
+
+        p.refreshFromDisk()
+        await fulfillment(of: [merged], timeout: 10)
+
+        let snap = p.load()
+        XCTAssertTrue(snap?.tasks.contains { $0.title == "from-peer" } ?? false)
+        XCTAssertTrue(snap?.tasks.contains { $0.title == "local" } ?? false,
+                      "Merging the relay's copy must not drop local state.")
+    }
+}

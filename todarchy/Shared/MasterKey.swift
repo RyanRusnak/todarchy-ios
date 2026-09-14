@@ -33,6 +33,13 @@ final class MasterKey: ObservableObject {
 
     @Published private(set) var currentKey: SymmetricKey?
 
+    /// The Argon2 salt `currentKey` was derived from. Published alongside
+    /// the key because the relay envelope carries the salt in its clear
+    /// header — a device that has only the passphrase needs it to
+    /// re-derive, and it can't read it out of the doc it's trying to
+    /// decrypt. `nil` whenever `currentKey` is.
+    @Published private(set) var currentSalt: Data?
+
     private let cache: MasterKeyCache
 
     /// In-memory mirror of the keychain blob. Read once at init via
@@ -52,6 +59,7 @@ final class MasterKey: ObservableObject {
             self.cachedBlob = blob
             if let unpacked = Self.unpack(blob) {
                 self.currentKey = unpacked.key
+                self.currentSalt = unpacked.salt
             }
         }
     }
@@ -81,6 +89,7 @@ final class MasterKey: ObservableObject {
         try cache.save(blob)
         self.cachedBlob = blob
         self.currentKey = SymmetricKey(data: rawKey)
+        self.currentSalt = salt
     }
 
     /// Reconcile a cached key with the salt the main doc currently
@@ -93,14 +102,17 @@ final class MasterKey: ObservableObject {
     func adoptSalt(_ salt: Data) {
         guard let blob = cachedBlob, let unpacked = Self.unpack(blob) else {
             currentKey = nil
+            currentSalt = nil
             return
         }
         if unpacked.salt == salt {
             currentKey = unpacked.key
+            currentSalt = unpacked.salt
         } else {
             try? cache.clear()
             cachedBlob = nil
             currentKey = nil
+            currentSalt = nil
         }
     }
 
@@ -111,6 +123,7 @@ final class MasterKey: ObservableObject {
         try? cache.clear()
         cachedBlob = nil
         currentKey = nil
+        currentSalt = nil
     }
 
     /// Replace the cached master key directly, without re-running
@@ -123,6 +136,7 @@ final class MasterKey: ObservableObject {
         try cache.save(blob)
         self.cachedBlob = blob
         self.currentKey = SymmetricKey(data: rawKey)
+        self.currentSalt = salt
     }
 
     // MARK: - Blob layout
