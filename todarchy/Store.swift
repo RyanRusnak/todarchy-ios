@@ -83,6 +83,7 @@ final class TaskStore: ObservableObject {
         // another device) arrive with `ctx` values this machine has never
         // seen. Fold them in so the chip list is the same everywhere.
         adoptContextsFromTasks()
+        dedupeContexts()
 
         // When another device writes the shared .automerge file, refresh.
         persistence?.onExternalChange = { [weak self] in
@@ -95,27 +96,36 @@ final class TaskStore: ObservableObject {
     private func refreshFromDisk() {
         guard let snap = persistence?.load() else { return }
         let selected = selectedTaskId
-        isApplyingDiskState = true
-        self.projects = snap.projects
-        self.tasks = snap.tasks.map { t in
+        let loadedTasks = snap.tasks.map { t -> TaskItem in
             var copy = t
             if copy.pos == nil { copy.pos = copy.created }
             return copy
         }
+        // Every one of these is `@Published`, so an assignment fires
+        // `objectWillChange` and makes SwiftUI re-diff the whole list.
+        // Comparing first is what keeps the common caller cheap: `flushNow`
+        // notifies unconditionally after a debounced save, and the snapshot
+        // it just wrote is the one this store handed it — so on a local
+        // edit all four compare equal and the reload publishes nothing.
+        isApplyingDiskState = true
+        if loadedTasks != tasks { self.tasks = loadedTasks }
+        if snap.projects != projects { self.projects = snap.projects }
         // External writers (sync) may have added/removed contexts; pick up
         // their list. Fall back to the in-memory list rather than wiping
         // when the doc is from before the field existed.
-        if let loaded = snap.contexts, !loaded.isEmpty {
+        if let loaded = snap.contexts, !loaded.isEmpty, loaded != contexts {
             self.contexts = loaded
         }
-        if let retired = snap.retiredContexts {
+        if let retired = snap.retiredContexts, retired != retiredContexts {
             self.retiredContexts = retired
         }
         isApplyingDiskState = false
         // Runs with `isApplyingDiskState` already cleared: anything adopted
         // here is a genuine local change that has to be saved back so the
-        // rest of the fleet converges on the same list.
+        // rest of the fleet converges on the same list. Both bail out
+        // without touching `contexts` when there's nothing to do.
         adoptContextsFromTasks()
+        dedupeContexts()
         // Preserve selection if the task still exists.
         if let sid = selected, !tasks.contains(where: { $0.id == sid }) {
             self.selectedTaskId = nil
@@ -211,6 +221,18 @@ final class TaskStore: ObservableObject {
         let added = discovered.sorted { $0.rawValue < $1.rawValue }
         contexts.append(contentsOf: added)
         return added
+    }
+
+    /// Collapse repeated entries, keeping the first occurrence.
+    ///
+    /// Two devices adopting the same unseen context concurrently insert it
+    /// into the Automerge array as distinct elements, so a merged doc can
+    /// carry the same context twice. `TaskContext.id` is the rawValue, so
+    /// duplicates also break ForEach identity — fold them on every load.
+    func dedupeContexts() {
+        guard contexts.count != Set(contexts.map(\.rawValue)).count else { return }
+        var seen = Set<String>()
+        contexts.removeAll { !seen.insert($0.rawValue).inserted }
     }
 
     /// Remove a context. Tasks that reference it keep their `ctx` value —

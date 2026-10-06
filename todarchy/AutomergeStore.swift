@@ -106,6 +106,26 @@ final class AutomergeStore {
         try locked { try doc.merge(other: otherCopy) }
     }
 
+    /// The doc's current head change hashes.
+    ///
+    /// Unlike `save()` this neither serializes nor parses, so bracketing a
+    /// batch of work with it is close to free, and "heads didn't move" is a
+    /// sound test for "that work changed nothing". Automerge will not append
+    /// a change for a `put` whose value already matches what's stored, so a
+    /// batch that only re-states current values leaves the heads exactly
+    /// where they were.
+    func heads() -> Set<ChangeHash> {
+        locked { doc.heads() }
+    }
+
+    /// Just the project records — no tasks, contexts or sorting. The
+    /// shared-project roster has to be reconciled on every sync tick,
+    /// including ticks where the doc hasn't moved, and paying a full
+    /// `snapshot()` for that is most of the tick's cost.
+    func projects() throws -> [ProjectItem] {
+        try locked { try readProjects() }
+    }
+
     // MARK: - Shape bootstrap
 
     /// Guarantee the root maps/lists exist with the seed contexts. Safe to
@@ -388,6 +408,14 @@ final class AutomergeStore {
         return out.sorted { $0.createdAt < $1.createdAt }
     }
 
+    /// Rewrite every field of `task` into `obj`.
+    ///
+    /// The writes are deliberately unconditional. Automerge appends no change
+    /// for a `put` whose value already matches what's stored, so restating a
+    /// task costs nothing; a read-before-write gate would save zero ops, and
+    /// on a conflicted key it would skip the very write that collapses the
+    /// conflict. `testRewritingUnchangedStateAppendsNoOps` pins the upstream
+    /// guarantee this relies on.
     private func writeTask(_ task: TaskItem, into obj: ObjId) throws {
         try doc.put(obj: obj, key: "id", value: .String(task.id))
         try doc.put(obj: obj, key: "list", value: .String(task.list))

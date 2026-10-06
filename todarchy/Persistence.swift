@@ -71,10 +71,44 @@ final class TaskStorePersistence: @unchecked Sendable {
     /// mode. Installed + torn down by `SyncSettings`. When present,
     /// Persistence additionally pulls/pushes the main-doc bytes (and
     /// each shared-project envelope) around local writes.
-    var serverClient: ServerSyncClient?
+    var serverClient: ServerSyncClient? {
+        didSet {
+            guard serverClient !== oldValue else { return }
+            invalidatePushGate()
+        }
+    }
 
     /// Server-side id for the main doc. Paired with `serverClient`.
-    var serverMainDocId: String?
+    var serverMainDocId: String? {
+        didSet {
+            guard serverMainDocId != oldValue else { return }
+            invalidatePushGate()
+        }
+    }
+
+    /// Re-arm the push gate so the next tick uploads regardless of what
+    /// the previous transport already holds. Called whenever the relay
+    /// identity or the sealing key changes — the bytes we skipped pushing
+    /// last time are no longer the bytes *this* relay is missing.
+    /// Both properties are written from the MainActor and read on the
+    /// persistence queue, so hop.
+    private func invalidatePushGate() {
+        queue.async { [weak self] in
+            self?.resetPushGate()
+        }
+    }
+
+    /// Queue-confined body of `invalidatePushGate`.
+    ///
+    /// Bumping `pushEpoch` is what makes this stick. A PUT that was already
+    /// in flight against the old relay or key would otherwise land after
+    /// the reset and record its digest, and the gate would then believe
+    /// the *new* relay already holds those bytes.
+    private func resetPushGate() {
+        pushEpoch &+= 1
+        lastPushedDigest = nil
+        lastPushedSharedDigests.removeAll()
+    }
 
     /// 10-second foreground poll timer. Fires `refreshFromDisk` so the
     /// existing pipeline picks up server changes alongside file
@@ -86,9 +120,19 @@ final class TaskStorePersistence: @unchecked Sendable {
     /// paired with the Argon2 salt it was derived from — the salt rides
     /// in the envelope's clear header so another device holding only the
     /// passphrase can re-derive.
-    struct RelayKey {
+    ///
+    /// `Equatable` so installing the same key again doesn't look like a
+    /// rotation: `SyncSettings.refreshRelayKey` re-publishes on every
+    /// master-key change, and treating a no-op re-install as a new key
+    /// would re-arm the push gate and re-upload the whole doc.
+    /// `SymmetricKey` has no public equality, so compare its encoding.
+    struct RelayKey: Equatable {
         let key: SymmetricKey
         let salt: Data
+
+        static func == (lhs: RelayKey, rhs: RelayKey) -> Bool {
+            lhs.salt == rhs.salt && CryptoBox.encode(lhs.key) == CryptoBox.encode(rhs.key)
+        }
     }
 
     private let relayKeyLock = NSLock()
@@ -100,7 +144,15 @@ final class TaskStorePersistence: @unchecked Sendable {
     /// persistence queue — so it carries its own lock.
     var relayKey: RelayKey? {
         get { relayKeyLock.lock(); defer { relayKeyLock.unlock() }; return _relayKey }
-        set { relayKeyLock.lock(); _relayKey = newValue; relayKeyLock.unlock() }
+        set {
+            relayKeyLock.lock()
+            let changed = _relayKey != newValue
+            _relayKey = newValue
+            relayKeyLock.unlock()
+            // A different key seals different ciphertext, so whatever we
+            // last uploaded is no longer what this relay should hold.
+            if changed { invalidatePushGate() }
+        }
     }
 
     /// Sticky: set once we've seen a sealed envelope come back from the
@@ -129,6 +181,96 @@ final class TaskStorePersistence: @unchecked Sendable {
     /// its tick, the next tick does its local disk work and skips the
     /// network rather than stacking a second batch on top.
     private var pullInFlight = false
+
+    /// The exact bytes currently sitting at `fileURL`, kept only when the
+    /// live doc has already absorbed them. Queue-confined.
+    ///
+    /// This is what lets an idle sync tick cost nothing. A tick that found
+    /// the file unchanged used to parse it, fork it, CRDT-merge it into
+    /// itself, snapshot every task, re-serialize, do a coordinated
+    /// `replaceItemAt` write, ChaCha20-seal the result and PUT the whole doc
+    /// — then have its own write re-trigger the file watcher and do the
+    /// merge half again. Comparing the bytes first collapses all of that to
+    /// one memcmp, and because our own write-back records the digest here,
+    /// the watcher it fires sees a match and goes quiet too. No suppression
+    /// flag, no race: a write from MCP, Dropbox or a peer simply has
+    /// different bytes and merges as before.
+    ///
+    /// `nil` until the first read or write of the current file, so the
+    /// first tick always does the full pass.
+    private var lastLocalBytes: Data?
+
+    /// SHA-256 of the *plaintext* main-doc bytes behind the last
+    /// **successful** relay PUT. Queue-confined.
+    ///
+    /// Deliberately separate from `lastLocalBytes`: "the disk hasn't moved"
+    /// and "the relay is up to date" are independent conditions.
+    /// `sealForRelay` refuses while the relay format is unprobed or the
+    /// passphrase is locked, and `pushMainToServer` is fire-and-forget and
+    /// can fail — so this is written only in the PUT's success path.
+    /// Recording it at call time instead would swallow a local edit made
+    /// while a request was in flight, and it would never reach the relay.
+    ///
+    /// Hashed rather than kept as bytes because sealing uses a fresh nonce
+    /// every time, so the ciphertext is never reusable — only the plaintext
+    /// identity is.
+    private var lastPushedDigest: Data?
+
+    /// Same gate as `lastPushedDigest`, per shared project, over the
+    /// envelope bytes on that project's local cache file. Queue-confined.
+    private var lastPushedSharedDigests: [String: Data] = [:]
+
+    /// Incremented by `resetPushGate`. A PUT records its digest on success
+    /// only if the epoch it started under is still current. Queue-confined.
+    private var pushEpoch = 0
+
+    /// One main-doc PUT at a time, latest bytes win. Queue-confined.
+    ///
+    /// The push gate stops a device re-uploading a doc the relay already
+    /// has, which also means nothing re-pushes a doc the relay has *lost*.
+    /// Two overlapping PUTs could land in the opposite order to how they
+    /// were sent, leaving the older doc on the relay while the newer
+    /// digest was recorded as pushed — and from then on every tick skipped
+    /// the push. Serializing removes the reordering. A push requested while
+    /// one is in flight is parked in `pendingMainPush`, replacing whatever
+    /// was already parked, and goes out when the current one finishes.
+    private var mainPushInFlight = false
+    private var pendingMainPush: (bytes: Data, force: Bool)?
+
+    /// Same discipline per shared project. The pending value is just the
+    /// file to read: the push re-reads it at send time, so it always sends
+    /// the newest envelope. Queue-confined.
+    private var sharedPushesInFlight: Set<String> = []
+    private var pendingSharedPushes: [String: URL] = [:]
+
+    /// Shared projects whose last PUT failed. Re-attempted every tick so a
+    /// blip doesn't strand the relay copy until this device edits that
+    /// project again. Queue-confined.
+    private var sharedPushesOwed: Set<String> = []
+
+    /// Heads of the doc the canonical file is known to hold in full.
+    /// Queue-confined.
+    ///
+    /// The refresh tick writes back whenever the live doc has moved past
+    /// this. That covers a peer merge, and also a local write that failed:
+    /// the edit is still in memory, so it has to keep being retried — the
+    /// doc not moving this tick doesn't mean the disk caught up.
+    ///
+    /// Set after every successful write, and on reading the file to the
+    /// heads of what it actually held, so a file that's behind the live
+    /// doc gets brought up to date.
+    private var diskHeads: Set<ChangeHash>?
+
+    /// True while a share-key adoption still owes a retry. Queue-confined.
+    /// `adoptShareKeysFromDoc` now only runs on ticks where the doc actually
+    /// moved, so without this a device that adopts while its passphrase is
+    /// locked would never pick the keys up — the doc may not change again
+    /// for days, but unlocking it should still work.
+    private var adoptPending = true
+
+    private static func digest(_ data: Data) -> Data {
+        Data(SHA256.hash(data: data))
+    }
 
     /// iOS security-scope URL. MUST be the exact URL instance that was
     /// granted scope (from `.fileImporter` or `resolvingBookmarkData`), not
@@ -169,7 +311,16 @@ final class TaskStorePersistence: @unchecked Sendable {
         // Construct the Automerge doc and start the file watcher on the
         // queue so every Document op from here on lives on one thread.
         self.automerge = queue.sync { AutomergeStore(data: data) }
-        queue.sync { startWatching() }
+        queue.sync {
+            // The doc was just built from these exact bytes, so they count
+            // as already absorbed. Without seeding this, the first refresh
+            // tick can't tell that nothing has moved.
+            if let data {
+                self.lastLocalBytes = data
+                self.diskHeads = self.automerge.heads()
+            }
+            startWatching()
+        }
     }
 
     nonisolated static func defaultFileURL() -> URL {
@@ -374,18 +525,32 @@ final class TaskStorePersistence: @unchecked Sendable {
     /// After a main-doc merge (disk read, server pull, etc.) call
     /// `ShareKeysSync.adoptFromDoc` so any keys peers published get
     /// imported into the local keychain. Hops to the MainActor
-    /// because adopt touches `MasterKey` state. Fire-and-forget — the
-    /// next merge tick will retry on transient failure.
+    /// because adopt touches `MasterKey` state. Fire-and-forget — a
+    /// failure re-arms `adoptPending` so the next tick retries even
+    /// when the doc itself hasn't moved.
     private func adoptShareKeysFromDoc() {
         let store = automerge
-        Task { @MainActor in
+        let queue = self.queue
+        adoptPending = false
+        Task { @MainActor [weak self] in
+            var needsRetry = false
             do {
                 _ = try ShareKeysSync.shared.adoptFromDoc(store)
             } catch {
+                needsRetry = true
                 #if DEBUG
                 print("todarchy: adoptShareKeysFromDoc failed: \(error)")
                 #endif
             }
+            // `adoptFromDoc` reports "nothing to do" both when the doc
+            // genuinely has no cipher and when we're locked out of the
+            // one it has. Only the second case is worth a retry.
+            if !needsRetry,
+               (try? store.readShareKeysSalt()) != nil,
+               MasterKey.shared.currentKey == nil {
+                needsRetry = true
+            }
+            queue.async { self?.adoptPending = needsRetry }
         }
     }
 
@@ -413,10 +578,12 @@ final class TaskStorePersistence: @unchecked Sendable {
         saveWork = nil
         guard let snap = pendingSnapshot else { return }
 
-        // 1. Absorb anything the sync daemon dropped onto disk.
-        if FileManager.default.fileExists(atPath: fileURL.path),
-           let onDisk = readBytes(from: fileURL) {
-            _ = mergeOrRebuild(onDisk)
+        // 1. Absorb anything the sync daemon dropped onto disk. Skipped
+        //    when the file still holds bytes we've already merged — the
+        //    common case while typing, and the difference between paying a
+        //    full parse + fork + CRDT merge per save and paying none.
+        if let onDisk = readMainDocBytes(), !alreadyAbsorbed(onDisk) {
+            absorbDiskBytes(onDisk)
         }
 
         // 1b. No relay pull here, on purpose. This is the debounced
@@ -426,8 +593,10 @@ final class TaskStorePersistence: @unchecked Sendable {
         //     `applyRefresh` on the 10 s poll and by `syncNow`. Nothing is
         //     lost by not merging first: PUT is unconditional ("local
         //     always wins"), so a push that races a peer is reconciled on
-        //     the next tick — every peer re-pushes its own doc each poll,
-        //     and Automerge makes the re-merge convergent, not lossy.
+        //     the next tick. Peers no longer re-push unconditionally every
+        //     poll (see `pushMainToServer`'s gate); instead `applyPull`
+        //     notices when the relay copy is missing changes we hold and
+        //     re-arms the push, which converges the same way.
 
         // 2. Pull in any conflict copies the sync daemon created.
         ingestConflictCopies()
@@ -486,6 +655,7 @@ final class TaskStorePersistence: @unchecked Sendable {
             for id in mainDeletes { try automerge.deleteTask(id) }
             for id in projectDeletes { try automerge.deleteProject(id) }
             for id in pendingDoneAtClears { try? automerge.clearDoneAt(id) }
+
             let bytes = automerge.save()
             try writeBytes(bytes)
             mainBytesForServer = bytes
@@ -700,6 +870,13 @@ final class TaskStorePersistence: @unchecked Sendable {
             // Legacy plaintext, written by a build from before relay
             // encryption. Merge it; the write-back at the end of this
             // cycle re-uploads the same content sealed.
+            //
+            // That write-back is gated on the doc actually moving, and the
+            // merge of our own history often doesn't move it. Drop the push
+            // digest so the sealed upgrade goes up regardless.
+            if relayKey != nil {
+                lastPushedDigest = nil
+            }
             return AutomergeStore.isDocument(bytes) ? .plain(bytes) : .unreadable
         }
         // Seeing ciphertext is what arms the no-downgrade rule, whether or
@@ -718,17 +895,41 @@ final class TaskStorePersistence: @unchecked Sendable {
         }
     }
 
+    /// What `applyPull` merged.
+    private struct PullOutcome {
+        /// True if any bytes were actually merged.
+        var merged = false
+        /// Heads of each shared-project relay doc merged this batch, keyed
+        /// by project id. Lets the caller tell whether that relay copy is
+        /// behind the local store once the rest of the tick has run.
+        var sharedRelayHeads: [String: Set<ChangeHash>] = [:]
+    }
+
     /// Merge a completed batch into the live docs and refresh the sync
-    /// health indicators. **Must run on `queue`.** Returns true if any
-    /// bytes were actually merged.
+    /// health indicators. **Must run on `queue`.**
     @discardableResult
-    private func applyPull(_ pull: ServerPull) -> Bool {
+    private func applyPull(_ pull: ServerPull) -> PullOutcome {
+        var outcome = PullOutcome()
         var merged = false
         var blocked: String?
         if let bytes = pull.mainBytes {
             switch decodeRelayPayload(bytes) {
             case .plain(let plain):
-                _ = mergeOrRebuild(plain)
+                let remote = AutomergeStore(data: plain)
+                do {
+                    try automerge.merge(remote)
+                } catch {
+                    rebuildDoc(from: plain)
+                }
+                // The relay changed under us (this was a 200, not a 304).
+                // If we hold changes it lacks, our heads now differ from its
+                // — typically a peer's PUT raced ours and overwrote it. The
+                // relay only learns them if we push, and the digest gate
+                // would skip that push whenever our own bytes haven't moved,
+                // so re-arm it.
+                if remote.heads() != automerge.heads() {
+                    lastPushedDigest = nil
+                }
                 merged = true
             case .locked(let salt):
                 if let salt {
@@ -745,11 +946,13 @@ final class TaskStorePersistence: @unchecked Sendable {
         // per-project key by `PerProjectStore`, so they need no handling
         // here — they were never plaintext on the relay.
         for (pid, bytes) in pull.sharedBytes {
-            guard let store = sharedStores[pid] else { continue }
-            _ = store.merge(encryptedBytes: bytes)
+            guard let store = sharedStores[pid],
+                  let relayHeads = store.mergeReturningRemoteHeads(encryptedBytes: bytes) else { continue }
+            outcome.sharedRelayHeads[pid] = relayHeads
             merged = true
         }
-        guard pull.attempted else { return merged }
+        outcome.merged = merged
+        guard pull.attempted else { return outcome }
         // A completed round-trip — including a 404 "no doc yet" and a 304
         // "unchanged" — tells us the relay's format. `blocked` doesn't
         // disqualify it: we read the bytes, we just couldn't use them.
@@ -771,7 +974,7 @@ final class TaskStorePersistence: @unchecked Sendable {
             }
             SyncSettings.shared.markServerHealth(.failing(failure))
         }
-        return merged
+        return outcome
     }
 
     /// Kick off a pull batch; `completion` runs on `queue` once the bytes
@@ -831,63 +1034,158 @@ final class TaskStorePersistence: @unchecked Sendable {
     /// the app is local-first, so we never surrender a write on 412.
     /// Fire-and-forget: we do not block the persistence queue on the
     /// network round-trip. Errors surface on `SyncSettings.serverHealth`.
-    private func pushMainToServer(_ bytes: Data) {
+    ///
+    /// Skipped when `bytes` are identical to what the last successful PUT
+    /// already put there, unless `force` (only `syncNow`, where the user
+    /// explicitly asked for a round trip). Sealing uses a fresh nonce per
+    /// call, so re-uploading unchanged content produces different
+    /// ciphertext and a new ETag — which is exactly what invalidated our
+    /// own `If-None-Match` and turned each idle tick into a
+    /// download-decrypt-merge-re-encrypt-upload loop that could never
+    /// converge. Skipping the redundant PUT is what lets the relay's 304
+    /// fast path fire again.
+    ///
+    /// At most one main-doc PUT is in flight; see `mainPushInFlight`.
+    /// **Must run on `queue`.**
+    private func pushMainToServer(_ bytes: Data, force: Bool = false) {
         guard let client = serverClient, let id = serverMainDocId else { return }
+        if mainPushInFlight {
+            // Latest bytes win, but a forced request stays forced even if a
+            // later ordinary one replaces its bytes.
+            let wasForced = pendingMainPush?.force ?? false
+            pendingMainPush = (bytes, force || wasForced)
+            return
+        }
+        let plaintextDigest = Self.digest(bytes)
+        guard force || plaintextDigest != lastPushedDigest else { return }
         guard let payload = sealForRelay(bytes) else { return }
-        Task.detached(priority: .utility) {
+        mainPushInFlight = true
+        let epoch = pushEpoch
+        Task.detached(priority: .utility) { [queue, weak self] in
+            var failure: String?
             do {
                 _ = try await client.put(id, payload)
-                await MainActor.run {
-                    SyncSettings.shared.markServerHealth(.ok)
-                }
             } catch {
-                await MainActor.run {
-                    SyncSettings.shared.markServerHealth(.failing(error.localizedDescription))
+                failure = error.localizedDescription
+            }
+            queue.async {
+                guard let self else { return }
+                // Success path only: a PUT that fails, or a local edit that
+                // lands while it's in flight, must still go out later. And
+                // only for the relay + key this PUT was sealed for.
+                if failure == nil, epoch == self.pushEpoch {
+                    self.lastPushedDigest = plaintextDigest
+                }
+                self.mainPushInFlight = false
+                if let next = self.pendingMainPush {
+                    self.pendingMainPush = nil
+                    // Re-runs the gate, so a parked copy of the bytes that
+                    // just went up is dropped here rather than re-sent.
+                    self.pushMainToServer(next.bytes, force: next.force)
+                }
+            }
+            await MainActor.run {
+                if let failure {
+                    SyncSettings.shared.markServerHealth(.failing(failure))
+                } else {
+                    SyncSettings.shared.markServerHealth(.ok)
                 }
             }
         }
     }
 
     /// Push a shared-project envelope (read from its local cache file)
-    /// to the relay. Same unconditional semantics as `pushMainToServer`.
+    /// to the relay. Same unconditional semantics as `pushMainToServer`,
+    /// and the same skip-when-identical gate — a shared file is re-sealed
+    /// with a fresh nonce whenever it's rewritten, so an ungated push
+    /// churns its ETag the same way.
+    ///
+    /// One PUT per project at a time, for the same reordering reason as
+    /// the main doc. A request made while one is in flight re-reads the
+    /// file when it runs, so it always sends the newest envelope. A failed
+    /// PUT lands in `sharedPushesOwed` and is retried on the next tick.
+    /// **Must run on `queue`.**
     private func pushSharedToServer(projectId: String, fileURL: URL) {
         guard let client = serverClient else { return }
+        if sharedPushesInFlight.contains(projectId) {
+            pendingSharedPushes[projectId] = fileURL
+            return
+        }
         guard let bytes = try? Data(contentsOf: fileURL) else { return }
-        Task.detached(priority: .utility) {
+        let envelopeDigest = Self.digest(bytes)
+        guard envelopeDigest != lastPushedSharedDigests[projectId] else {
+            sharedPushesOwed.remove(projectId)
+            return
+        }
+        sharedPushesInFlight.insert(projectId)
+        let epoch = pushEpoch
+        Task.detached(priority: .utility) { [queue, weak self] in
+            var ok = false
             do {
                 _ = try await client.put(projectId, bytes)
+                ok = true
             } catch {
                 #if DEBUG
                 print("todarchy: server PUT \(projectId) failed: \(error.localizedDescription)")
                 #endif
             }
+            queue.async {
+                guard let self else { return }
+                self.sharedPushesInFlight.remove(projectId)
+                if ok, epoch == self.pushEpoch {
+                    self.lastPushedSharedDigests[projectId] = envelopeDigest
+                    self.sharedPushesOwed.remove(projectId)
+                } else {
+                    // Failed, or went to a relay we've since moved off.
+                    self.sharedPushesOwed.insert(projectId)
+                }
+                if let next = self.pendingSharedPushes.removeValue(forKey: projectId) {
+                    self.pushSharedToServer(projectId: projectId, fileURL: next)
+                }
+            }
         }
     }
 
-    /// Start the foreground 30s poll that pulls from the server at a
-    /// steady cadence while the app is active. Idempotent; safe to call
-    /// whenever the server client is installed.
+    /// Start the foreground poll that pulls from the server at a steady
+    /// cadence while the app is active. Idempotent; safe to call whenever
+    /// the server client is installed.
+    ///
+    /// Both start and stop are main-confined. `Timer.invalidate()` only
+    /// detaches a timer when it runs on the thread that scheduled it, so
+    /// invalidating from the persistence queue left the old timer live
+    /// while a new one was installed beside it — every mode switch leaked
+    /// another 10 s poll, and each leaked timer kept ticking for the rest
+    /// of the process lifetime.
     func startServerPollTimer() {
-        stopServerPollTimer()
-        guard serverClient != nil else { return }
+        guard serverClient != nil else {
+            stopServerPollTimer()
+            return
+        }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.serverPollTimer?.invalidate()
             // 10 s cadence — keeps ETag-cached GETs (304s) cheap and
             // makes "peer added a task" land within ~10 s on the
             // viewer. Server traffic is negligible because the relay
             // returns 304 unless something actually changed.
-            let t = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            let t = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
                 self?.refreshFromDisk()
             }
-            // Keep firing while the run loop is busy with UI events.
+            // `.common` covers `.default` plus event tracking, so the poll
+            // keeps firing during a scroll or an open menu. Registering it
+            // here only — rather than `scheduledTimer` (which adds to
+            // `.default`) plus an extra `.common` add — avoids putting the
+            // same timer on the run loop twice.
             RunLoop.main.add(t, forMode: .common)
             self.serverPollTimer = t
         }
     }
 
     private func stopServerPollTimer() {
-        serverPollTimer?.invalidate()
-        serverPollTimer = nil
+        DispatchQueue.main.async { [weak self] in
+            self?.serverPollTimer?.invalidate()
+            self?.serverPollTimer = nil
+        }
     }
 
     /// Scan the canonical file's directory for sibling `*.automerge` files
@@ -898,11 +1196,18 @@ final class TaskStorePersistence: @unchecked Sendable {
     ///   iCloud:    `tasks 2.automerge`
     ///   Syncthing: `tasks.sync-conflict-20260420-123456-XXXX.automerge`
     /// All have a `.automerge` suffix and start with our canonical stem.
-    private func ingestConflictCopies() {
+    ///
+    /// Returns the number of copies absorbed. Callers use it to decide
+    /// whether a write-back is owed: absorbing a copy deletes the sibling
+    /// file, so until the canonical one is rewritten its contents exist
+    /// only in the live doc.
+    @discardableResult
+    private func ingestConflictCopies() -> Int {
         let dir = fileURL.deletingLastPathComponent()
         let canonical = fileURL.lastPathComponent
         let stem = (canonical as NSString).deletingPathExtension
-        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return }
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return 0 }
+        var absorbed = 0
         for entry in entries where entry != canonical
                                 && entry.hasSuffix(".automerge")
                                 && entry.hasPrefix(stem) {
@@ -911,8 +1216,10 @@ final class TaskStorePersistence: @unchecked Sendable {
                 let other = AutomergeStore(data: bytes)
                 try? automerge.merge(other)
                 try? FileManager.default.removeItem(at: url)
+                absorbed += 1
             }
         }
+        return absorbed
     }
 
     /// Force a re-read of the canonical file and merge into the live doc.
@@ -947,9 +1254,20 @@ final class TaskStorePersistence: @unchecked Sendable {
     /// Queue-confined body of `refreshFromDisk`, run once the (possibly
     /// empty) server pull is in hand.
     private func applyRefresh(pull: ServerPull) {
+        // Captured before the relay merge so "heads moved" covers both
+        // the pull and the disk merge below. `heads()` neither serializes
+        // nor parses, so bracketing the tick with it is free.
+        let headsBefore = automerge.heads()
+        // Same bracket per shared store. The relay merge inside `applyPull`
+        // only changes a store's in-memory doc — its file doesn't move —
+        // so per-call "did the file change" results can't see it. Comparing
+        // heads across the whole tick catches every path a peer edit can
+        // arrive by.
+        let sharedHeadsBefore = sharedStores.mapValues { $0.heads() }
+
         // Merge the relay's bytes first so disk + server state reconcile
         // in one pass.
-        applyPull(pull)
+        let pulled = applyPull(pull)
 
         // If a local mutation is queued for the debounced save, promote
         // this refresh into a full flush. The bare merge/notify path below
@@ -961,39 +1279,121 @@ final class TaskStorePersistence: @unchecked Sendable {
             flushNow()
             return
         }
-        if FileManager.default.fileExists(atPath: fileURL.path),
-           let bytes = readBytes(from: fileURL) {
-            _ = mergeOrRebuild(bytes)
-        }
+
+        // Conflict copies are folded in before deciding whether to write:
+        // absorbing one deletes the sibling file, so its contents exist
+        // only in the live doc until the canonical file is rewritten. The
+        // `diskHeads` comparison below sees that and writes it out.
         ingestConflictCopies()
+
+        let diskBytes = readMainDocBytes()
+        if !alreadyAbsorbed(diskBytes), let diskBytes {
+            absorbDiskBytes(diskBytes)
+        }
+
+        let docChanged = automerge.heads() != headsBefore
 
         // After the main doc reconciles, adopt any share keys peers
         // published — same as in flushNow's step 2b. Hops to the
         // MainActor because adopt touches `MasterKey`.
-        adoptShareKeysFromDoc()
+        //
+        // Skipped when the doc didn't move and no earlier attempt is
+        // outstanding: the share-keys cipher can only have changed if
+        // some op landed.
+        if docChanged || adoptPending {
+            adoptShareKeysFromDoc()
+        }
 
         // Now that the main doc is current, open any newly shared
         // projects and reconcile each store against its local file.
-        if let snap = try? automerge.snapshot() {
-            refreshSharedStores(mainProjects: snap.projects)
+        // `projects()` skips the task list, contexts and sorting — the
+        // roster is all refreshSharedStores reads.
+        if let projects = try? automerge.projects() {
+            refreshSharedStores(mainProjects: projects)
         }
         for (_, store) in sharedStores {
-            _ = store.refreshFromDisk()
-            _ = store.ingestConflictCopies()
+            store.refreshFromDisk()
+            store.ingestConflictCopies()
         }
 
-        // Always write back — this resolves conflict copies on disk.
-        var mainBytesForServer: Data?
-        _ = retryOnPoison {
-            let b = automerge.save()
-            try writeBytes(b)
-            mainBytesForServer = b
+        // A store opening or closing (a key arriving, an unshare) changes
+        // what `load()` returns even if no doc moved.
+        var sharedChanged = Set(sharedStores.keys) != Set(sharedHeadsBefore.keys)
+        for (pid, store) in sharedStores {
+            let heads = store.heads()
+            if heads != sharedHeadsBefore[pid] { sharedChanged = true }
+
+            // Relay merges and absorbed conflict copies otherwise live only
+            // in memory until the user next edits this project.
+            let persisted = (try? store.persistIfNeeded()) ?? false
+
+            // Push when the relay is missing something we hold. If we pulled
+            // its copy this tick we know exactly what it has; if not, only a
+            // write we just made can have put something new on our side.
+            var owesPush = sharedPushesOwed.contains(pid)
+            if let relayHeads = pulled.sharedRelayHeads[pid] {
+                if heads != relayHeads {
+                    // The file may not have changed since our last PUT, so
+                    // clear its digest or the gate would skip the push.
+                    lastPushedSharedDigests[pid] = nil
+                    owesPush = true
+                }
+            } else if persisted {
+                owesPush = true
+            }
+            if owesPush {
+                pushSharedToServer(projectId: pid, fileURL: store.fileURL)
+            }
         }
-        if let b = mainBytesForServer {
+
+        // Write back whenever the live doc holds anything the file doesn't:
+        // a relay or disk merge, an absorbed conflict copy, or a local
+        // write that failed last time. Comparing against `diskHeads`
+        // rather than `headsBefore` is what keeps that last case retrying —
+        // a failed write leaves the doc ahead of the disk without the doc
+        // moving again.
+        //
+        // Deliberately not `retryOnPoison`. `save()` can't throw, so the only
+        // failure here is the write itself, and that helper's recovery —
+        // rebuild the doc from disk — would throw away exactly the
+        // unwritten changes this branch exists to persist. On failure the
+        // doc stays ahead of `diskHeads` and the next tick tries again.
+        // The relay still gets the bytes: getting an edit off the device
+        // shouldn't depend on the local folder being writable.
+        var bytesToPush: Data?
+        if automerge.heads() != diskHeads {
+            let b = automerge.save()
+            do {
+                try writeBytes(b)
+            } catch {
+                #if DEBUG
+                print("todarchy: refresh write-back failed, will retry next tick: \(error)")
+                #endif
+            }
+            bytesToPush = b
+        } else {
+            // The file already holds the doc's current state. Reuse its
+            // bytes rather than paying another serialize — pushMainToServer's
+            // own digest gate decides whether they actually need to go up.
+            bytesToPush = lastLocalBytes ?? automerge.save()
+        }
+        if let b = bytesToPush {
             pushMainToServer(b)
         }
+
+        // Only notify when something a reader can see actually changed.
+        // Every notification rebuilds the store's published arrays and
+        // invalidates the whole SwiftUI tree, which is the bulk of what
+        // an idle tick used to cost.
+        //
+        // `markChecked` rides along unconditionally — it isn't published,
+        // so this hop is a dispatch and nothing more.
+        let notify = docChanged || sharedChanged
         DispatchQueue.main.async { [weak self] in
-            self?.onExternalChange?()
+            SyncSettings.shared.markChecked()
+            if notify {
+                self?.onExternalChange?()
+            }
         }
     }
 
@@ -1089,7 +1489,7 @@ final class TaskStorePersistence: @unchecked Sendable {
                         bytesForServer = b
                     }
                     if wrote, let b = bytesForServer {
-                        pushMainToServer(b)
+                        pushMainToServer(b, force: true)
                         let count = (try? automerge.snapshot().tasks.count) ?? 0
                         DispatchQueue.main.async { [weak self] in
                             self?.onExternalChange?()
@@ -1129,7 +1529,7 @@ final class TaskStorePersistence: @unchecked Sendable {
                              message: "Sync folder wasn't writable. Try Stop + Pick again.")
             }
             if let b = bytesForServer {
-                pushMainToServer(b)
+                pushMainToServer(b, force: true)
             }
             let count = (try? automerge.snapshot().tasks.count) ?? 0
             DispatchQueue.main.async { [weak self] in
@@ -1154,6 +1554,13 @@ final class TaskStorePersistence: @unchecked Sendable {
         try withScopedFolder {
             try writeBytesUnscoped(data)
         }
+        // Recorded only once the write has landed. Recording on the way in
+        // would let a failed write leave stale bytes on disk that the next
+        // tick mistakes for already-absorbed.
+        lastLocalBytes = data
+        // Every caller passes `automerge.save()` from the same queue turn,
+        // so the live heads are the heads of what just landed.
+        diskHeads = automerge.heads()
     }
 
     private func writeBytesUnscoped(_ data: Data) throws {
@@ -1219,6 +1626,40 @@ final class TaskStorePersistence: @unchecked Sendable {
         withScopedFolder {
             Self.readBytesStatic(from: url)
         }
+    }
+
+    /// Read the canonical main-doc file, or `nil` when it's missing.
+    private func readMainDocBytes() -> Data? {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        return readBytes(from: fileURL)
+    }
+
+    /// True when `bytes` are byte-identical to what we last read from or
+    /// wrote to the canonical file, so the live doc already contains them
+    /// and a merge would add nothing.
+    private func alreadyAbsorbed(_ bytes: Data?) -> Bool {
+        guard let bytes, let known = lastLocalBytes else { return false }
+        return bytes == known
+    }
+
+    /// Merge the canonical file's current bytes into the live doc and
+    /// record them as the new disk baseline. **Must run on `queue`.**
+    ///
+    /// `diskHeads` becomes the heads of what the file actually holds, not
+    /// the merged result. When the file is behind the live doc — an
+    /// external writer put back an older copy, or our last write failed —
+    /// the two differ and the next write-back check brings the file up to
+    /// date.
+    private func absorbDiskBytes(_ bytes: Data) {
+        let onDisk = AutomergeStore(data: bytes)
+        do {
+            try automerge.merge(onDisk)
+        } catch {
+            // Poisoned live doc: same recovery as `mergeOrRebuild`.
+            rebuildDoc(from: bytes)
+        }
+        lastLocalBytes = bytes
+        diskHeads = onDisk.heads()
     }
 
     /// Same as `readBytes` but callable from `init` before `self` is fully
@@ -1296,11 +1737,36 @@ final class TaskStorePersistence: @unchecked Sendable {
                 return
             }
             if let bytes = readBytes(from: fileURL) {
-                _ = mergeOrRebuild(bytes)
-                ingestConflictCopies()
-                DispatchQueue.main.async { [weak self] in
-                    SyncSettings.shared.markMerged()
-                    self?.onExternalChange?()
+                // Our own `writeBytes` re-arms the watcher, so this fires
+                // for writes we just made. Comparing against the bytes we
+                // know are already in the doc turns that into a no-op —
+                // no second merge, no second UI reload.
+                let known = bytes == lastLocalBytes
+                let headsBefore = automerge.heads()
+                if !known {
+                    absorbDiskBytes(bytes)
+                }
+                // A conflict copy is deleted once absorbed, so if we don't
+                // persist the merge here the change lives only in memory.
+                // Same for a file that turned out to be behind the live doc.
+                // Outside server mode there's no poll tick to catch either.
+                // Plain do/catch rather than `retryOnPoison`, for the reason
+                // given in `applyRefresh`.
+                let absorbed = ingestConflictCopies()
+                if automerge.heads() != diskHeads {
+                    do {
+                        try writeBytes(automerge.save())
+                    } catch {
+                        #if DEBUG
+                        print("todarchy: watcher write-back failed: \(error)")
+                        #endif
+                    }
+                }
+                if automerge.heads() != headsBefore || absorbed > 0 {
+                    DispatchQueue.main.async { [weak self] in
+                        SyncSettings.shared.markMerged()
+                        self?.onExternalChange?()
+                    }
                 }
             }
             // Re-arm the watcher on the same queue we're on.
@@ -1323,18 +1789,31 @@ final class TaskStorePersistence: @unchecked Sendable {
                 at: newURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
+            var targetBytes: Data?
             if FileManager.default.fileExists(atPath: newURL.path),
-               let targetBytes = readBytes(from: newURL) {
+               let bytes = readBytes(from: newURL) {
+                targetBytes = bytes
                 if replaceLocalDoc {
-                    rebuildDoc(from: targetBytes)
+                    rebuildDoc(from: bytes)
                 } else {
-                    _ = mergeOrRebuild(targetBytes)
+                    _ = mergeOrRebuild(bytes)
                     ingestConflictCopies()
                 }
             }
             self.fileURL = newURL
+            // Every baseline we were tracking described the old URL and
+            // the old relay. Clear them so the first tick against the new
+            // destination is unconditional.
+            lastLocalBytes = nil
+            diskHeads = nil
+            resetPushGate()
             var bytesForServer: Data?
-            if !replaceLocalDoc {
+            if replaceLocalDoc {
+                // The doc was rebuilt verbatim from these bytes, so they
+                // count as already absorbed.
+                lastLocalBytes = targetBytes
+                if targetBytes != nil { diskHeads = automerge.heads() }
+            } else {
                 _ = retryOnPoison {
                     let b = automerge.save()
                     try writeBytes(b)

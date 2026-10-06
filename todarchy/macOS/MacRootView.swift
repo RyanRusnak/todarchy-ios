@@ -206,20 +206,28 @@ private struct MacSidebar: View {
             .padding(.top, 18)
             .padding(.bottom, 18)
 
-            // Inbox row
-            listRow(store.inboxProject, kbd: "0")
+            // Scrolls so a long project/context list can't push the hint
+            // block off the bottom. The explicit stack matters: ScrollView's
+            // implicit one is center-aligned with default spacing, which
+            // would center the section headers and spread the rows apart.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Inbox row
+                    listRow(store.inboxProject, kbd: "0")
 
-            sectionHeader("PROJECTS").padding(.top, 16)
-            ForEach(Array(store.projects.enumerated()), id: \.element.id) { idx, project in
-                listRow(project, kbd: "\(idx + 1)")
+                    sectionHeader("PROJECTS").padding(.top, 16)
+                    ForEach(Array(store.projects.enumerated()), id: \.element.id) { idx, project in
+                        listRow(project, kbd: "\(idx + 1)")
+                    }
+
+                    contextsHeader.padding(.top, 18)
+                    ForEach(store.contexts) { ctx in
+                        contextRow(ctx)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            contextsHeader.padding(.top, 18)
-            ForEach(store.contexts) { ctx in
-                contextRow(ctx)
-            }
-
-            Spacer()
+            .scrollIndicators(.hidden)
 
             hintBlock()
         }

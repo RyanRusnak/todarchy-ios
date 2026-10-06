@@ -271,7 +271,19 @@ final class SyncSettings: ObservableObject {
         UserDefaults.standard.set(now, forKey: lastMergedKey)
     }
 
+    /// When the last poll tick finished, whether or not it found anything
+    /// to merge. Deliberately not `@Published` — it moves every tick, and
+    /// publishing it would put back the per-tick SwiftUI invalidation that
+    /// the change guards below exist to remove. `SyncDiagnosticsView` reads
+    /// it at render time behind its own Refresh button.
+    private(set) var lastCheckedAt: Date?
+
+    func markChecked() {
+        lastCheckedAt = Date()
+    }
+
     func markServerHealth(_ health: ServerHealth) {
+        guard serverHealth != health else { return }
         serverHealth = health
     }
 
@@ -281,21 +293,25 @@ final class SyncSettings: ObservableObject {
     func refreshRelayKey(persistence: TaskStorePersistence = .shared) {
         if let key = MasterKey.shared.currentKey, let salt = MasterKey.shared.currentSalt {
             persistence.relayKey = .init(key: key, salt: salt)
-            relayEncryption = .on
-            relayEnvelopeSalt = nil
+            if relayEncryption != .on { relayEncryption = .on }
+            if relayEnvelopeSalt != nil { relayEnvelopeSalt = nil }
         } else {
             persistence.relayKey = nil
             // `.locked` is the interesting case — the relay is holding
             // ciphertext we can't read — and Persistence tells us that by
             // handing over an envelope salt.
-            relayEncryption = relayEnvelopeSalt == nil ? .off : .locked
+            let next: RelayEncryption = relayEnvelopeSalt == nil ? .off : .locked
+            if relayEncryption != next { relayEncryption = next }
         }
     }
 
     /// Called by `Persistence` when a relay envelope couldn't be opened.
+    /// Fires on every tick while this device is locked out, so both
+    /// assignments are guarded — otherwise a locked device republished the
+    /// same salt ten times a minute for no reason.
     func noteRelayEnvelopeSalt(_ salt: Data) {
-        relayEnvelopeSalt = salt
-        if MasterKey.shared.currentKey == nil {
+        if relayEnvelopeSalt != salt { relayEnvelopeSalt = salt }
+        if MasterKey.shared.currentKey == nil, relayEncryption != .locked {
             relayEncryption = .locked
         }
     }

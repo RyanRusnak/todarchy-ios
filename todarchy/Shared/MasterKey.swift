@@ -101,19 +101,32 @@ final class MasterKey: ObservableObject {
     /// sync tick.
     func adoptSalt(_ salt: Data) {
         guard let blob = cachedBlob, let unpacked = Self.unpack(blob) else {
-            currentKey = nil
-            currentSalt = nil
+            clearIfSet()
             return
         }
         if unpacked.salt == salt {
+            // `SymmetricKey` has no public equality, so `currentSalt` stands
+            // in for "same key" — the pair is only ever assigned together.
+            if currentKey != nil, currentSalt == salt { return }
             currentKey = unpacked.key
             currentSalt = unpacked.salt
         } else {
             try? cache.clear()
             cachedBlob = nil
-            currentKey = nil
-            currentSalt = nil
+            clearIfSet()
         }
+    }
+
+    /// Drop the published pair without re-assigning it when it's already
+    /// empty. Both are `@Published` and `adoptSalt` fires on every main-doc
+    /// merge, so unconditional assignment published an `objectWillChange`
+    /// per sync tick for a key that hadn't moved — and `SyncSettings`,
+    /// which observes it, re-derived and re-published the relay key in
+    /// turn, invalidating the whole settings surface.
+    private func clearIfSet() {
+        if currentKey == nil, currentSalt == nil { return }
+        currentKey = nil
+        currentSalt = nil
     }
 
     /// Drop the cached master key. Used for "Reset shared lists" and

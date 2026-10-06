@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Automerge
 
 /// Encrypted, file-backed Automerge doc for a single shared project.
 ///
@@ -55,6 +56,27 @@ final class PerProjectStore {
     private(set) var fileURL: URL
     private var automerge: AutomergeStore
 
+    /// The envelope bytes this store has already absorbed — either the
+    /// ones it wrote itself or the ones it merged in from disk. Comparing
+    /// against it turns a refresh tick where nothing external landed into
+    /// a memcmp instead of a ChaCha20 open + Automerge parse + fork + CRDT
+    /// merge, which is most of what an idle shared-project tick cost.
+    ///
+    /// Deliberately *not* updated by `merge(encryptedBytes:)`: conflict
+    /// copies arrive through that path and their bytes never become the
+    /// canonical file.
+    private var lastEnvelopeBytes: Data?
+
+    /// Heads of the doc the canonical file is known to hold in full.
+    /// `persistIfNeeded` writes only when the live doc has moved past it,
+    /// which is how relay merges and absorbed conflict copies reach disk
+    /// without an idle tick re-sealing an unchanged doc.
+    ///
+    /// Seeded with the opening heads even when there's no file yet, so a
+    /// blank store never writes — and then pushes — an empty doc over a
+    /// populated relay copy.
+    private var fileHeads: Set<ChangeHash>
+
     /// Construct from an on-disk file (or use a fresh blank doc if the
     /// file doesn't exist / won't decrypt). Callers that care about the
     /// difference should use `readSnapshot()` which throws on failure.
@@ -66,9 +88,16 @@ final class PerProjectStore {
            let enc = try? Data(contentsOf: fileURL),
            let plain = try? CryptoBox.open(enc, with: key) {
             self.automerge = AutomergeStore(data: plain)
+            self.lastEnvelopeBytes = enc
         } else {
             self.automerge = AutomergeStore()
         }
+        self.fileHeads = automerge.heads()
+    }
+
+    /// The live doc's head change hashes. Cheap — no serialization.
+    func heads() -> Set<ChangeHash> {
+        automerge.heads()
     }
 
     // MARK: - Load
@@ -100,9 +129,30 @@ final class PerProjectStore {
         try automerge.upsertTasks(snapshot.tasks)
         for id in deletedTaskIds { try automerge.deleteTask(id) }
 
+        try writeCurrentDoc()
+    }
+
+    /// Write the live doc to disk if it holds anything the file doesn't.
+    /// Returns true when it wrote.
+    ///
+    /// For changes that arrive *without* a local edit: a relay pull, or
+    /// an absorbed conflict copy (whose sibling file is deleted as soon as
+    /// it's merged). Without this both lived only in memory until the user
+    /// next edited this project.
+    @discardableResult
+    func persistIfNeeded() throws -> Bool {
+        guard automerge.heads() != fileHeads else { return false }
+        try writeCurrentDoc()
+        return true
+    }
+
+    private func writeCurrentDoc() throws {
+        let heads = automerge.heads()
         let plain = automerge.save()
         let envelope = try CryptoBox.seal(plain, with: key)
         try writeAtomically(envelope)
+        lastEnvelopeBytes = envelope
+        fileHeads = heads
     }
 
     // MARK: - Merge
@@ -114,32 +164,58 @@ final class PerProjectStore {
     /// our envelope format) — caller can then log + ignore.
     @discardableResult
     func merge(encryptedBytes remoteEnvelope: Data) -> Bool {
+        absorb(remoteEnvelope) != nil
+    }
+
+    /// Same as `merge(encryptedBytes:)`, but hands back the heads of the
+    /// doc that was merged in, or nil when it couldn't be opened.
+    ///
+    /// The relay pull uses this to tell whether the relay is *behind*: if
+    /// our heads differ from the relay doc's after merging it, we hold
+    /// changes the relay is missing and owe it a push.
+    func mergeReturningRemoteHeads(encryptedBytes remoteEnvelope: Data) -> Set<ChangeHash>? {
+        absorb(remoteEnvelope)
+    }
+
+    private func absorb(_ remoteEnvelope: Data) -> Set<ChangeHash>? {
         guard let plain = try? CryptoBox.open(remoteEnvelope, with: key) else {
-            return false
+            return nil
         }
         let other = AutomergeStore(data: plain)
         do {
             try automerge.merge(other)
-            return true
         } catch {
             // Live doc poisoned — rebuild from the peer's bytes as the
             // least-bad recovery, mirroring `TaskStorePersistence`'s
             // `rebuildDoc(from:)` semantics.
             self.automerge = AutomergeStore(data: plain)
-            return true
         }
+        return other.heads()
     }
 
     /// Convenience: re-read our own file from disk and merge in. Used
     /// after an external write lands (Dropbox / iCloud file-provider
     /// dropped updated bytes).
+    ///
+    /// Returns true only when the live doc actually moved, so callers can
+    /// tell "a peer's edit arrived" from "this was our own write coming
+    /// back around". Bytes identical to what we last absorbed short-circuit
+    /// before any crypto or Automerge work; a merge that lands but adds
+    /// nothing new still records the bytes so the next tick skips them too.
     @discardableResult
     func refreshFromDisk() -> Bool {
         guard FileManager.default.fileExists(atPath: fileURL.path),
               let bytes = try? Data(contentsOf: fileURL) else {
             return false
         }
-        return merge(encryptedBytes: bytes)
+        if bytes == lastEnvelopeBytes { return false }
+        let headsBefore = automerge.heads()
+        guard let onDiskHeads = absorb(bytes) else { return false }
+        lastEnvelopeBytes = bytes
+        // The file now holds exactly `onDiskHeads`. If that's behind the
+        // live doc, `persistIfNeeded` will write the difference out.
+        fileHeads = onDiskHeads
+        return automerge.heads() != headsBefore
     }
 
     /// Scan the folder for sibling *conflict copies* of this shared

@@ -185,9 +185,9 @@ final class SyncModeTransitionTests: XCTestCase {
     }
 }
 
-// MARK: - MockURLProtocol helpers for this test file
+// MARK: - MockURLProtocol helpers
 
-private extension MockURLProtocol {
+extension MockURLProtocol {
     static func makeSession() -> URLSession {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.protocolClasses = [MockURLProtocol.self]

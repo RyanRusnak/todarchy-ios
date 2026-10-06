@@ -37,6 +37,11 @@ struct SyncDiagnosticsView: View {
                     row("relay encryption", relayEncryptionLabel)
                 }
                 row("last merged", settings.lastMergedAt?.formatted() ?? "never")
+                // Not published — advances on every poll tick, including
+                // ticks that found nothing, which is what makes "is the
+                // poller even running?" answerable from a screenshot.
+                // Tap Refresh to re-read it.
+                row("last checked", settings.lastCheckedAt?.formatted() ?? "never")
                 row("last error", settings.lastSyncError ?? "—")
                 row("currently syncing", settings.isSyncing ? "yes" : "no")
 

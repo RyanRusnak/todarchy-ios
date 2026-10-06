@@ -241,4 +241,102 @@ final class AutomergeStoreTests: XCTestCase {
         // that the doc is valid and doesn't crash.
         _ = merged
     }
+
+    // MARK: - No-op writes append no ops
+
+    /// The snapshot write path rewrites every field of every task and
+    /// project on each flush, unconditionally (see `writeTask`). That's only
+    /// affordable because Automerge appends no change for a `put` whose
+    /// value already matches what's stored — history is permanent, so if it
+    /// did, the doc would grow on every save for the life of the file. The
+    /// idle-sync gates also lean on this: "heads didn't move" is how they
+    /// know a batch changed nothing. This pins that upstream guarantee, so
+    /// an Automerge upgrade that drops it fails here rather than silently
+    /// bloating every user's doc.
+    func testRewritingUnchangedStateAppendsNoOps() throws {
+        let store = AutomergeStore()
+        var t = TaskItem(list: "inbox", title: "stable",
+                         created: Date(timeIntervalSince1970: 1_700_000_000),
+                         pos: Date(timeIntervalSince1970: 1_700_000_000))
+        t.ctx = TaskContext(rawValue: "home")
+        t.dueDate = Date(timeIntervalSince1970: 1_700_000_500)
+        t.note = "a note"
+        t.doneAt = Date(timeIntervalSince1970: 1_700_000_900)
+        t.deferUntil = Date(timeIntervalSince1970: 1_700_001_000)
+        t.parent = "some-other-task"
+        t.comments = [Comment(id: "c1", author: "Me", text: "hello",
+                              createdAt: Date(timeIntervalSince1970: 1_700_000_100))]
+        let p = ProjectItem(id: "p_bloat", name: "bloat", icon: "folder",
+                            accentHex: 0x123456, isShared: true, claudeAccess: true)
+
+        try store.upsertTasks([t])
+        try store.upsertProjects([p])
+        let heads = store.heads()
+        let size = store.save().count
+
+        // Every field already holds what we're about to write, so Automerge
+        // should record zero ops however many times we repeat it.
+        for _ in 0..<5 {
+            try store.upsertTasks([t])
+            try store.upsertProjects([p])
+        }
+
+        XCTAssertEqual(store.heads(), heads,
+                       "Rewriting identical state must not append a change. History is permanent, so each redundant op is growth we can never undo.")
+        XCTAssertEqual(store.save().count, size,
+                       "The doc must not grow when nothing changed.")
+
+        // Control: the two assertions above only mean something if a real
+        // edit *does* move the heads and grow the doc. Without this the test
+        // would also pass if `heads()` were stuck or `save()` memoized.
+        var edited = t
+        edited.title = "actually changed"
+        try store.upsertTasks([edited])
+        XCTAssertNotEqual(store.heads(), heads,
+                          "Control: a genuine edit must append a change.")
+        XCTAssertGreaterThan(store.save().count, size,
+                             "Control: a genuine edit must grow the doc.")
+    }
+
+    /// The other half of the no-op guarantee: a write that *does* change
+    /// something still has to land. An optional field that goes away must
+    /// produce a real tombstone, or a cleared due date / defer / parent /
+    /// position would survive in the doc and come back on the next merge.
+    /// Same for the two boolean project flags, which are dropped rather than
+    /// written as `false`.
+    func testClearedOptionalFieldsAreStillDeleted() throws {
+        let store = AutomergeStore()
+        var t = TaskItem(list: "inbox", title: "clear-me",
+                         created: Date(timeIntervalSince1970: 1_700_000_000),
+                         pos: Date(timeIntervalSince1970: 1_700_000_000))
+        t.dueDate = Date(timeIntervalSince1970: 1_700_000_500)
+        t.deferUntil = Date(timeIntervalSince1970: 1_700_001_000)
+        t.parent = "some-parent"
+        try store.upsertTasks([t])
+
+        var cleared = t
+        cleared.dueDate = nil
+        cleared.deferUntil = nil
+        cleared.parent = nil
+        cleared.pos = nil
+        try store.upsertTasks([cleared])
+
+        let round = try XCTUnwrap(try store.snapshot().tasks.first)
+        XCTAssertNil(round.dueDate, "A cleared due date must not survive the rewrite.")
+        XCTAssertNil(round.deferUntil, "A cleared defer must not survive the rewrite.")
+        XCTAssertNil(round.parent, "A cleared parent must not survive the rewrite.")
+        XCTAssertNil(round.pos, "A cleared sort position must not survive the rewrite.")
+
+        let shared = ProjectItem(id: "p_flags", name: "flags", icon: "folder",
+                                 accentHex: 0x123456, isShared: true, claudeAccess: true)
+        try store.upsertProjects([shared])
+        var unshared = shared
+        unshared.isShared = false
+        unshared.claudeAccess = false
+        try store.upsertProjects([unshared])
+
+        let pRound = try XCTUnwrap(try store.snapshot().projects.first { $0.id == "p_flags" })
+        XCTAssertFalse(pRound.isShared, "Unsharing must drop the flag, not leave it stuck true.")
+        XCTAssertFalse(pRound.claudeAccess, "Revoking Claude access must drop the flag.")
+    }
 }
