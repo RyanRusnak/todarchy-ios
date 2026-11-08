@@ -11,6 +11,7 @@ import Foundation
 //   todokase add <text> [--project <name>]   add a task (inbox if no flag)
 //   todokase list [--project <name>] [--all]  list open tasks
 //   todokase next [--project <name>]          the single next task to do
+//   todokase done <id>...                     complete task(s) by id prefix
 
 // MARK: - Errors / output
 
@@ -26,6 +27,8 @@ usage:
   todokase add <text> [--project <name>]    add a task (defaults to inbox)
   todokase list [--project <name>] [--all]  list open tasks
   todokase next [--project <name>]          show the next task to do
+  todokase done <id>...                     complete task(s) by id (the
+                                            6-char prefix `list` prints)
 
 <text> uses the same quick-add syntax as the app:
   todokase add "email alice @work !today /ask about the invoice"
@@ -171,6 +174,37 @@ func runNext(_ doc: TodarchyDoc) throws {
     }
 }
 
+func runDone(_ doc: TodarchyDoc) throws {
+    guard !positional.isEmpty else {
+        die("which task? e.g. todokase done 09d3e0  (ids come from `todokase list`)")
+    }
+    let snap = try doc.store.snapshot()
+    let names = projectNames(snap)
+    // Resolve every id before writing so a typo doesn't leave a partial batch.
+    var targets: [TaskItem] = []
+    for prefix in positional {
+        let matches = snap.tasks.filter { $0.id.lowercased().hasPrefix(prefix.lowercased()) }
+        switch matches.count {
+        case 0: die("no task with id '\(prefix)'")
+        case 1: targets.append(matches[0])
+        default:
+            let rows = matches.map { "  " + formatRow($0, names: names, showProject: true) }
+            die("'\(prefix)' matches \(matches.count) tasks — use more of the id:\n" + rows.joined(separator: "\n"))
+        }
+    }
+    let now = Date()
+    for var task in targets {
+        if task.isDone {
+            print("already done  \(task.title)")
+            continue
+        }
+        task.doneAt = now
+        try doc.store.upsertTask(task)
+        print("done  \(task.title)  (\(names[task.list] ?? task.list))")
+    }
+    try doc.save()
+}
+
 // MARK: - Dispatch
 
 do {
@@ -179,9 +213,10 @@ do {
     case "add":          try runAdd(doc)
     case "list", "ls":   try runList(doc)
     case "next":         try runNext(doc)
+    case "done", "complete": try runDone(doc)
     case "help", "--help", "-h": print(usage)
     default:
-        die("unknown command '\(command)'. try: add, list, next  (todokase --help)")
+        die("unknown command '\(command)'. try: add, list, next, done  (todokase --help)")
     }
 } catch {
     die(error.localizedDescription)
