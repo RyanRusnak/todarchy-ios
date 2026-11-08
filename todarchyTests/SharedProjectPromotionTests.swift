@@ -54,12 +54,11 @@ final class SharedProjectPromotionTests: XCTestCase {
         let bytes = try Data(contentsOf: fileURL)
         XCTAssertTrue(CryptoBox.isEnvelope(bytes))
 
-        // Main doc: project still present, but flagged shared; its
-        // tasks have been removed. Unrelated tasks untouched.
+        // The UI keeps the union of personal and shared tasks visible.
         let project = store.projects.first(where: { $0.id == pid })
         XCTAssertNotNil(project)
         XCTAssertTrue(project!.isShared)
-        XCTAssertFalse(store.tasks.contains(where: { $0.list == pid }))
+        XCTAssertTrue(store.tasks.contains(where: { $0.list == pid }))
         XCTAssertTrue(store.tasks.contains(where: { $0.title == "unrelated" }))
     }
 
@@ -96,6 +95,48 @@ final class SharedProjectPromotionTests: XCTestCase {
         XCTAssertNoThrow(try CryptoBox.open(bytes, with: payload.key))
     }
 
+    func testRenamedStarterListsGetDistinctSharedIdentities() throws {
+        let other = TaskStore.ephemeral()
+        let otherFolder = tmpDir.appendingPathComponent("other")
+        let otherManager = SharedProjectManager(folder: otherFolder, keyStore: InMemoryKeyStore())
+        for device in [store!, other] {
+            device.projects = [ProjectItem(id: "p_home", name: "Renamed list", icon: "cart", accent: .orange)]
+            device.tasks = [TaskItem(id: "same-demo-task", list: "p_home", title: "milk")]
+            device.activeSelection = .list("p_home")
+        }
+        let first = try ShareLink.decode(store.promoteToShared("p_home", manager: manager)).get()
+        let second = try ShareLink.decode(other.promoteToShared("p_home", manager: otherManager)).get()
+        XCTAssertNotEqual(first.projectId, "p_home")
+        XCTAssertNotEqual(first.projectId, second.projectId)
+        XCTAssertEqual(store.activeSelection, .list(first.projectId))
+        XCTAssertNotEqual(store.tasks.first?.id, other.tasks.first?.id)
+        let shared = try XCTUnwrap(manager.openStore(for: first.projectId))
+        let snapshot = try shared.readSnapshot()
+        XCTAssertEqual(snapshot.tasks.map(\.id), store.tasks.map(\.id))
+        XCTAssertEqual(snapshot.tasks.map(\.list), store.tasks.map(\.list))
+        XCTAssertEqual(snapshot.tasks.map(\.title), store.tasks.map(\.title))
+        XCTAssertEqual(try shared.readSnapshot().project.name, "Renamed list")
+    }
+
+    func testStarterPromotionSurvivesFlushAndRestart() throws {
+        let mainFile = tmpDir.appendingPathComponent("tasks.automerge")
+        let persistence = TaskStorePersistence(fileURL: mainFile)
+        persistence.sharedProjectManager = manager
+        let project = ProjectItem(id: "p_home", name: "Groceries", icon: "cart", accent: .orange)
+        let milk = TaskItem(list: project.id, title: "milk")
+        persistence.saveNow(.init(tasks: [milk], projects: [project]))
+        let live = TaskStore(persistence: persistence)
+        let payload = try ShareLink.decode(live.promoteToShared(project.id, manager: manager)).get()
+        XCTAssertTrue(persistence.syncNow().success)
+        let main = AutomergeStore(data: try Data(contentsOf: mainFile))
+        XCTAssertTrue(try main.snapshot().tasks.isEmpty)
+        XCTAssertEqual(try main.snapshot().projects.map(\.id), [payload.projectId])
+        let restarted = TaskStorePersistence(fileURL: mainFile)
+        restarted.sharedProjectManager = manager
+        XCTAssertEqual(restarted.load()?.tasks.map(\.title), ["milk"])
+        XCTAssertEqual(restarted.load()?.projects.map(\.id), [payload.projectId])
+    }
+
     // MARK: - Guards
 
     func testPromoteUnknownProjectThrows() {
@@ -120,24 +161,26 @@ final class SharedProjectPromotionTests: XCTestCase {
         }
     }
 
-    // MARK: - Undo
+    func testPromotionSurvivesPersistenceFlushAndRestart() async throws {
+        let mainFile = tmpDir.appendingPathComponent("tasks.automerge")
+        let persistence = TaskStorePersistence(fileURL: mainFile)
+        persistence.sharedProjectManager = manager
+        let project = ProjectItem(id: "p_groc", name: "groceries", icon: "cart", accent: .orange)
+        let milk = TaskItem(list: project.id, title: "milk", pos: Date())
+        persistence.saveNow(.init(tasks: [milk], projects: [project]))
+        let live = TaskStore(persistence: persistence)
+        _ = try live.promoteToShared(project.id, manager: manager)
 
-    func testPromoteIsOneUndoUnit() throws {
-        let pid = "p_x"
-        store.projects = [ProjectItem(id: pid, name: "x", icon: "folder", accent: .blue)]
-        let t1 = TaskItem(list: pid, title: "a", pos: Date())
-        let t2 = TaskItem(list: pid, title: "b", pos: Date())
-        store.tasks = [t1, t2]
-
-        _ = try store.promoteToShared(pid, manager: manager)
-        XCTAssertFalse(store.tasks.contains(where: { $0.list == pid }))
-
-        // Undo restores the original task set. The shared file / key
-        // still exist — undo doesn't reach through the file system —
-        // but the TaskStore's in-memory state is back to pre-promotion.
-        XCTAssertTrue(store.undo())
-        XCTAssertEqual(Set(store.tasks.filter { $0.list == pid }.map(\.title)),
-                       Set(["a", "b"]))
+        // Flush the actual debounced snapshot, including any delete buffers
+        // produced by TaskStore. The old ephemeral-only tests missed this.
+        XCTAssertTrue(persistence.syncNow().success)
+        let shared = try XCTUnwrap(manager.openStore(for: project.id))
+        XCTAssertEqual(try shared.readSnapshot().tasks.map(\.id), [milk.id])
+        let main = AutomergeStore(data: try Data(contentsOf: mainFile))
+        XCTAssertTrue(try main.snapshot().tasks.isEmpty)
+        let restarted = TaskStorePersistence(fileURL: mainFile)
+        restarted.sharedProjectManager = manager
+        XCTAssertEqual(restarted.load()?.tasks.map(\.id), [milk.id])
     }
 
     // MARK: - Join-from-link path

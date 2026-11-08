@@ -93,6 +93,7 @@ struct SharedProjectManager {
         keyStore.delete(for: projectId)
         let url = fileURL(for: projectId)
         try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(at: url.appendingPathExtension("pending"))
     }
 
     /// List the project ids of shared files present in the folder,

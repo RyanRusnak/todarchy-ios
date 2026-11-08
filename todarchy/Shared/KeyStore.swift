@@ -33,6 +33,9 @@ protocol KeyStore {
 /// Service name is namespaced to the app's bundle id so two todarchy
 /// installs (e.g. Debug + Release) don't collide.
 final class KeychainKeyStore: KeyStore {
+    /// Sharing and key propagation must see the same in-memory cache.
+    static let shared = KeychainKeyStore()
+
     enum KeychainError: Error, LocalizedError, Equatable {
         case unexpectedStatus(OSStatus)
         case dataInvalid

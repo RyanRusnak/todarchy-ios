@@ -21,7 +21,7 @@ import Argon2
 final class ShareKeysSync {
     static let shared = ShareKeysSync(
         masterKey: MasterKey.shared,
-        keyStore: KeychainKeyStore()
+        keyStore: KeychainKeyStore.shared
     )
 
     let masterKey: MasterKey

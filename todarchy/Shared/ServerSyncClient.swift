@@ -90,10 +90,13 @@ final class ServerSyncClient: @unchecked Sendable {
 
     /// GET /doc/:id. Returns `(bytes, etag)` on 200, `nil` on 304 or 404.
     /// Throws `ClientError.http` on any other non-2xx / non-304 / non-404.
-    func get(_ docId: String) async throws -> (Data, etag: String)? {
+    func get(_ docId: String, useCache: Bool = true) async throws -> (Data, etag: String)? {
         var req = URLRequest(url: docURL(docId))
         req.httpMethod = "GET"
-        if let cached = cachedETag(for: docId) {
+        // ETags are managed here. URLSession's separate response cache must
+        // not substitute stale bytes or suppress an initial full download.
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        if useCache, let cached = cachedETag(for: docId) {
             req.setValue(cached, forHTTPHeaderField: "If-None-Match")
         }
 

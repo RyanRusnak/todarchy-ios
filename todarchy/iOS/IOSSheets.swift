@@ -606,6 +606,9 @@ struct TaskDetailSheet: View {
     @State private var commentDraft = ""
     @FocusState private var commentFocused: Bool
     @FocusState private var noteFocused: Bool
+    @State private var addingContext = false
+    @State private var newContextDraft = ""
+    @FocusState private var newContextFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -639,6 +642,7 @@ struct TaskDetailSheet: View {
         }
         .onChange(of: store.selectedTaskId) { _, _ in
             editingNote = false
+            addingContext = false
             if let t = selectedTask {
                 title = t.title
                 note = t.note
@@ -768,6 +772,66 @@ struct TaskDetailSheet: View {
         !commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The task's current context first (so the active chip is always
+    /// visible without scrolling), then the rest by usage.
+    private func contextChoices(task: TaskItem) -> [TaskContext] {
+        let byUsage = store.contextsByUsage
+        guard let current = task.ctx else { return byUsage }
+        return [current] + byUsage.filter { $0 != current }
+    }
+
+    private func contextChip(_ ctx: TaskContext, task: TaskItem) -> some View {
+        let selected = task.ctx == ctx
+        let color = ctx.color
+        return Button {
+            store.setContext(task.id, ctx: selected ? nil : ctx)
+        } label: {
+            Text(ctx.rawValue)
+                .font(Typo.mono(12, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected ? color : Theme.fgMute)
+                .padding(.horizontal, 9).padding(.vertical, 5)
+                .background((selected ? color : Color.clear).opacity(selected ? 0.16 : 0))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(selected ? color.opacity(0.5) : Theme.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func newContextField(task: TaskItem) -> some View {
+        HStack(spacing: 4) {
+            TextField("@context", text: $newContextDraft)
+                .font(Typo.mono(12))
+                .foregroundStyle(Theme.fg)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .focused($newContextFocused)
+                .frame(width: 110)
+                .onSubmit { commitNewContext(task: task) }
+            Button {
+                addingContext = false
+            } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.fgMute)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.accent.opacity(0.6), lineWidth: 1))
+    }
+
+    private func commitNewContext(task: TaskItem) {
+        if let ctx = store.addContext(newContextDraft) {
+            store.setContext(task.id, ctx: ctx)
+        }
+        newContextDraft = ""
+        addingContext = false
+    }
+
     private func dueChip(_ bucket: DueBucket, task: TaskItem) -> some View {
         let selected = task.due == bucket
         return Button {
@@ -861,20 +925,41 @@ struct TaskDetailSheet: View {
                 }
             }
 
-            HStack {
+            HStack(alignment: .center) {
                 Text("context").font(Typo.mono(12)).foregroundStyle(Theme.fgMute).frame(width: 70, alignment: .leading)
-                Menu {
-                    Button("none") { store.setContext(task.id, ctx: nil) }
-                    ForEach(store.contexts) { c in
-                        Button(c.rawValue) { store.setContext(task.id, ctx: c) }
+                // Inline one-tap chips (most-used first) instead of a tiny
+                // menu — much easier to hit on a phone. Tapping the active
+                // chip clears it; "+ new" creates and assigns a new context.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        if addingContext {
+                            newContextField(task: task)
+                        } else {
+                            Button {
+                                newContextDraft = ""
+                                addingContext = true
+                            } label: {
+                                Text("+ new")
+                                    .font(Typo.mono(12))
+                                    .foregroundStyle(Theme.accent)
+                                    .padding(.horizontal, 9).padding(.vertical, 5)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 5)
+                                            .stroke(Theme.accent.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                                    )
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        ForEach(contextChoices(task: task)) { c in
+                            contextChip(c, task: task)
+                        }
                     }
-                } label: {
-                    if let c = task.ctx {
-                        CtxChip(ctx: c, highlighted: true)
-                    } else {
-                        Text("none").font(Typo.mono(13)).foregroundStyle(Theme.fgMute)
-                    }
+                    .padding(.vertical, 1)
                 }
+            }
+            .onChange(of: addingContext) { _, adding in
+                if adding { DispatchQueue.main.async { newContextFocused = true } }
             }
 
             HStack {

@@ -76,6 +76,18 @@ final class ServerSyncClientTests: XCTestCase {
         XCTAssertNil(second, "304 must be reported as nil (no change)")
     }
 
+    func testInitialDownloadBypassesRememberedETagAndURLCache() async throws {
+        MockURLProtocol.stub(path: "/doc/uninitialized", method: "GET") { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "If-None-Match"))
+            XCTAssertEqual(request.cachePolicy, .reloadIgnoringLocalCacheData)
+            return MockResponse(status: 200, headers: ["ETag": "current"], body: Data([0xAB]))
+        }
+        let client = ServerSyncClient(baseURL: baseURL, session: session)
+        client.setCachedETag("already-downloaded-but-not-applied", for: "uninitialized")
+        let response = try await client.get("uninitialized", useCache: false)
+        XCTAssertEqual(response?.0, Data([0xAB]))
+    }
+
     func testGet404ReturnsNil_treatsMissingAsNoRemote() async throws {
         MockURLProtocol.stub(path: "/doc/absent", method: "GET") { _ in
             MockResponse(status: 404, headers: [:],

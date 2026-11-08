@@ -9,6 +9,8 @@ struct TaskInspectorContent: View {
     @FocusState private var commentFocused: Bool
     @State private var bodyState = BodyEditorState()
     @FocusState private var bodyFocused: Bool
+    @State private var addingContext = false
+    @State private var newContextDraft = ""
 
     var body: some View {
         ScrollView {
@@ -91,6 +93,17 @@ struct TaskInspectorContent: View {
             }
             .padding(20)
         }
+        .alert("New context", isPresented: $addingContext) {
+            TextField("@context", text: $newContextDraft)
+            Button("Add") {
+                if let ctx = store.addContext(newContextDraft) {
+                    store.setContext(task.id, ctx: ctx)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Creates the context and assigns it to this task.")
+        }
     }
 
     private var metaGrid: some View {
@@ -117,8 +130,12 @@ struct TaskInspectorContent: View {
                             }
                         }
                     }
+                    Divider()
+                    Button("new context…") {
+                        newContextDraft = ""
+                        addingContext = true
+                    }
                     if task.ctx != nil {
-                        Divider()
                         Button("clear", role: .destructive) {
                             store.setContext(task.id, ctx: nil)
                         }

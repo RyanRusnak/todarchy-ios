@@ -371,9 +371,19 @@ final class TaskStorePersistence: @unchecked Sendable {
         guard let manager = sharedProjectManager else { return }
         let sharedIds = Set(mainProjects.filter { $0.isShared }.map { $0.id })
 
-        // Open new ones.
-        for pid in sharedIds where sharedStores[pid] == nil {
+        // An invitation can replace a key after a store has already opened.
+        // The live store must use the new key as well as the keychain.
+        for pid in sharedIds {
+            if let existing = sharedStores[pid], let key = manager.keyStore.load(for: pid),
+               existing.key.withUnsafeBytes({ Data($0) }) != key.withUnsafeBytes({ Data($0) }) {
+                sharedStores.removeValue(forKey: pid)
+                serverClient?.setCachedETag(nil, for: pid)
+            }
+            guard sharedStores[pid] == nil else { continue }
             if let store = manager.openStore(for: pid) {
+                if let project = mainProjects.first(where: { $0.id == pid }) {
+                    store.setPlaceholderProject(project)
+                }
                 sharedStores[pid] = store
             }
         }
@@ -534,8 +544,9 @@ final class TaskStorePersistence: @unchecked Sendable {
         adoptPending = false
         Task { @MainActor [weak self] in
             var needsRetry = false
+            var imported = 0
             do {
-                _ = try ShareKeysSync.shared.adoptFromDoc(store)
+                imported = try ShareKeysSync.shared.adoptFromDoc(store)
             } catch {
                 needsRetry = true
                 #if DEBUG
@@ -550,7 +561,22 @@ final class TaskStorePersistence: @unchecked Sendable {
                MasterKey.shared.currentKey == nil {
                 needsRetry = true
             }
-            queue.async { self?.adoptPending = needsRetry }
+            let didImport = imported > 0
+            queue.async { [weak self] in
+                guard let self else { return }
+                self.adoptPending = needsRetry
+                if didImport {
+                    // Adoption finishes after the original refresh. Open the
+                    // stores now so the follow-up pull includes their ids.
+                    if let projects = try? self.automerge.projects() {
+                        self.refreshSharedStores(mainProjects: projects)
+                    }
+                    self.refreshFromDisk()
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onExternalChange?()
+                    }
+                }
+            }
         }
     }
 
@@ -652,6 +678,10 @@ final class TaskStorePersistence: @unchecked Sendable {
             if let retired = snap.retiredContexts {
                 try automerge.writeRetiredContexts(retired)
             }
+            // Promotion is a storage move, not a collaborative deletion.
+            // Remove old main-doc copies only after their shared store exists.
+            let movedTasks = try automerge.snapshot().tasks.filter { sharedIds.contains($0.list) }
+            for task in movedTasks { try automerge.deleteTask(task.id) }
             for id in mainDeletes { try automerge.deleteTask(id) }
             for id in projectDeletes { try automerge.deleteProject(id) }
             for id in pendingDoneAtClears { try? automerge.clearDoneAt(id) }
@@ -669,7 +699,8 @@ final class TaskStorePersistence: @unchecked Sendable {
             let deletes = deletesByShared[pid] ?? []
             do {
                 try store.save(.init(tasks: tasks, project: project),
-                               deletedTaskIds: deletes)
+                               deletedTaskIds: deletes,
+                               seedProject: false)
                 pushSharedToServer(projectId: pid, fileURL: store.fileURL)
             } catch {
                 #if DEBUG
@@ -733,6 +764,7 @@ final class TaskStorePersistence: @unchecked Sendable {
         let client: ServerSyncClient
         let mainDocId: String?
         let sharedIds: [String]
+        let forceSharedIds: Set<String>
     }
 
     /// Round-trip budget for one batch. Same 5 s the old semaphore-based
@@ -750,9 +782,14 @@ final class TaskStorePersistence: @unchecked Sendable {
     /// cache file is still read in the meantime.
     private func makePullRequest() -> PullRequest? {
         guard let client = serverClient else { return nil }
+        // A key or invitation may have arrived since the last refresh.
+        if let projects = try? automerge.projects() {
+            refreshSharedStores(mainProjects: projects)
+        }
         return PullRequest(client: client,
                            mainDocId: serverMainDocId,
-                           sharedIds: Array(sharedStores.keys))
+                           sharedIds: Array(sharedStores.keys),
+                           forceSharedIds: Set(sharedStores.compactMap { $0.value.needsInitialDownload ? $0.key : nil }))
     }
 
     /// Run the GETs for one batch — main doc and shared envelopes in
@@ -771,7 +808,7 @@ final class TaskStorePersistence: @unchecked Sendable {
                 }
                 for pid in req.sharedIds {
                     group.addTask {
-                        do { return (pid, try await req.client.get(pid)?.0, nil) }
+                        do { return (pid, try await req.client.get(pid, useCache: !req.forceSharedIds.contains(pid))?.0, nil) }
                         catch { return (pid, nil, error.localizedDescription) }
                     }
                 }
@@ -779,13 +816,13 @@ final class TaskStorePersistence: @unchecked Sendable {
                     guard let pid else {
                         // Main doc: a nil `bytes` with no failure is a 304.
                         pull.mainBytes = bytes
-                        pull.errorMessage = failure
+                        if let failure { pull.errorMessage = failure }
                         continue
                     }
                     if let bytes { pull.sharedBytes[pid] = bytes }
-                    #if DEBUG
-                    if let failure { print("todarchy: server GET \(pid) failed: \(failure)") }
-                    #endif
+                    if let failure {
+                        pull.errorMessage = "Shared list download failed: \(failure)"
+                    }
                 }
             }
             return pull
@@ -946,8 +983,17 @@ final class TaskStorePersistence: @unchecked Sendable {
         // per-project key by `PerProjectStore`, so they need no handling
         // here — they were never plaintext on the relay.
         for (pid, bytes) in pull.sharedBytes {
-            guard let store = sharedStores[pid],
-                  let relayHeads = store.mergeReturningRemoteHeads(encryptedBytes: bytes) else { continue }
+            guard let store = sharedStores[pid] else {
+                // The roster can change while a request is in flight. A
+                // discarded response must remain downloadable next time.
+                serverClient?.setCachedETag(nil, for: pid)
+                continue
+            }
+            guard let relayHeads = store.mergeReturningRemoteHeads(encryptedBytes: bytes) else {
+                serverClient?.setCachedETag(nil, for: pid)
+                blocked = "A shared list could not be decrypted. Reopen its invitation to refresh access."
+                continue
+            }
             outcome.sharedRelayHeads[pid] = relayHeads
             merged = true
         }
@@ -1473,10 +1519,9 @@ final class TaskStorePersistence: @unchecked Sendable {
             if pendingSnapshot != nil {
                 flushNow()
             }
-            applyPull(pull)
-            for (_, store) in sharedStores {
-                _ = store.refreshFromDisk()
-            }
+            // Use the same shared-store reconciliation as automatic sync:
+            // downloaded envelopes must reach disk even without a local edit.
+            applyRefresh(pull: pull)
             guard FileManager.default.fileExists(atPath: fileURL.path) else {
                 // With server mode active, we may have merged remote bytes
                 // but have no local file yet — write one now so subsequent
@@ -1490,7 +1535,7 @@ final class TaskStorePersistence: @unchecked Sendable {
                     }
                     if wrote, let b = bytesForServer {
                         pushMainToServer(b, force: true)
-                        let count = (try? automerge.snapshot().tasks.count) ?? 0
+                        let count = load()?.tasks.count ?? 0
                         DispatchQueue.main.async { [weak self] in
                             self?.onExternalChange?()
                         }
@@ -1531,7 +1576,7 @@ final class TaskStorePersistence: @unchecked Sendable {
             if let b = bytesForServer {
                 pushMainToServer(b, force: true)
             }
-            let count = (try? automerge.snapshot().tasks.count) ?? 0
+            let count = load()?.tasks.count ?? 0
             DispatchQueue.main.async { [weak self] in
                 self?.onExternalChange?()
             }

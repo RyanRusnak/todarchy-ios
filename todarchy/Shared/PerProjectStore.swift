@@ -67,6 +67,24 @@ final class PerProjectStore {
     /// canonical file.
     private var lastEnvelopeBytes: Data?
 
+    /// A newly accepted invitation has only a local placeholder until its
+    /// first download. Preserve local edits without publishing that stub.
+    private var placeholderProject: ProjectItem?
+
+    private var pendingFileURL: URL { fileURL.appendingPathExtension("pending") }
+
+    func setPlaceholderProject(_ project: ProjectItem) {
+        if !hasProjectRecord { placeholderProject = project }
+    }
+
+    /// A cached HTTP response is not proof that this store received it.
+    /// Until a real project record has merged, request the full envelope.
+    var needsInitialDownload: Bool { !hasProjectRecord }
+
+    private var hasProjectRecord: Bool {
+        (try? automerge.projects().contains { $0.id == projectId }) == true
+    }
+
     /// Heads of the doc the canonical file is known to hold in full.
     /// `persistIfNeeded` writes only when the live doc has moved past it,
     /// which is how relay merges and absorbed conflict copies reach disk
@@ -93,6 +111,11 @@ final class PerProjectStore {
             self.automerge = AutomergeStore()
         }
         self.fileHeads = automerge.heads()
+        // Edits made before the first download are durable locally, but
+        // never occupy the canonical file that the relay uploads.
+        if let pending = try? Data(contentsOf: pendingFileURL) {
+            _ = absorb(pending)
+        }
     }
 
     /// The live doc's head change hashes. Cheap — no serialization.
@@ -107,7 +130,7 @@ final class PerProjectStore {
     /// but defense-in-depth is cheap.
     func readSnapshot() throws -> Snapshot {
         let shape = try automerge.snapshot()
-        guard let project = shape.projects.first(where: { $0.id == projectId }) else {
+        guard let project = shape.projects.first(where: { $0.id == projectId }) ?? placeholderProject else {
             throw StoreError.missingProject
         }
         let tasks = shape.tasks.filter { $0.list == projectId }
@@ -119,17 +142,32 @@ final class PerProjectStore {
     /// Upsert the snapshot into the live doc and write the encrypted
     /// envelope to disk atomically. `deletedTaskIds` produce real
     /// Automerge tombstones so deletions propagate.
-    func save(_ snapshot: Snapshot, deletedTaskIds: Set<String> = []) throws {
+    func save(_ snapshot: Snapshot, deletedTaskIds: Set<String> = [],
+              seedProject: Bool = true) throws {
         // Sanity: every task in a shared project must be listed under
         // that project. Anything else is a caller bug.
         for t in snapshot.tasks where t.list != projectId {
             assertionFailure("PerProjectStore: task \(t.id) has list=\(t.list), expected \(projectId)")
         }
-        try automerge.upsertProject(snapshot.project)
+        if !seedProject && !hasProjectRecord {
+            placeholderProject = snapshot.project
+        } else if snapshot.project != placeholderProject {
+            // A queued UI snapshot may still contain the placeholder after
+            // the first download. Never write it over the real metadata.
+            try automerge.upsertProject(snapshot.project)
+            placeholderProject = nil
+        }
         try automerge.upsertTasks(snapshot.tasks)
         for id in deletedTaskIds { try automerge.deleteTask(id) }
 
-        try writeCurrentDoc()
+        if hasProjectRecord {
+            try writeCurrentDoc()
+        } else {
+            let pending = try CryptoBox.seal(automerge.save(), with: key)
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try pending.write(to: pendingFileURL, options: .atomic)
+        }
     }
 
     /// Write the live doc to disk if it holds anything the file doesn't.
@@ -141,7 +179,7 @@ final class PerProjectStore {
     /// next edited this project.
     @discardableResult
     func persistIfNeeded() throws -> Bool {
-        guard automerge.heads() != fileHeads else { return false }
+        guard hasProjectRecord, automerge.heads() != fileHeads else { return false }
         try writeCurrentDoc()
         return true
     }
@@ -153,6 +191,7 @@ final class PerProjectStore {
         try writeAtomically(envelope)
         lastEnvelopeBytes = envelope
         fileHeads = heads
+        try? FileManager.default.removeItem(at: pendingFileURL)
     }
 
     // MARK: - Merge

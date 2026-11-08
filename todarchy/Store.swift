@@ -599,7 +599,7 @@ final class TaskStore: ObservableObject {
     /// focus name field", not "create with placeholder name".
     @discardableResult
     func addProject(name: String = "", accent: Color = Theme.accent, icon: String = "folder") -> String {
-        let id = "p_\(UUID().uuidString.prefix(8).lowercased())"
+        let id = "p_\(UUID().uuidString.lowercased())"
         projects.append(ProjectItem(id: id, name: name, icon: icon, accent: accent))
         return id
     }
@@ -693,9 +693,11 @@ final class TaskStore: ObservableObject {
         case invalidLink(String)
         case keyPersistenceFailed(String)
         case passphraseRequired
+        case conflictingInvitation
 
         var errorDescription: String? {
             switch self {
+            case .conflictingInvitation: return "This invitation conflicts with a shared list already on this device. Ask the sender to create a new list and share that list instead."
             case .projectNotFound: return "Project not found."
             case .inboxNotShareable: return "The inbox can't be shared."
             case .alreadyShared: return "This project is already shared."
@@ -716,10 +718,8 @@ final class TaskStore: ObservableObject {
     /// The key is already in the key store at this point; the link
     /// carries the key in its fragment so collaborators can join.
     ///
-    /// Phase 3b scope: this only handles the *promotion* path. Ongoing
-    /// read/write routing to the shared file comes in Phase 3c; until
-    /// then, a promoted project's tasks vanish from the main TaskStore
-    /// snapshot until they're re-loaded through that path.
+    /// The visible tasks stay in the union snapshot while persistence
+    /// routes them to the shared file and removes the main-doc copies.
     @discardableResult
     @MainActor
     func promoteToShared(_ projectId: String, manager: SharedProjectManager) throws -> URL {
@@ -729,8 +729,21 @@ final class TaskStore: ObservableObject {
         guard !project.isInbox else { throw ShareError.inboxNotShareable }
         guard !project.isShared else { throw ShareError.alreadyShared }
 
-        let projectTasks = tasks.filter { $0.list == projectId }
-        let created = try manager.createShared(project: project, tasks: projectTasks)
+        // Starter ids (even after a rename) are identical across accounts.
+        // Give those lists and their deterministic demo tasks fresh identities
+        // before publishing anything under a globally visible relay id.
+        var sharedProject = project
+        var projectTasks = tasks.filter { $0.list == projectId }
+        if Self.seedProjects.contains(where: { $0.id == projectId }) {
+            sharedProject.id = "p_\(UUID().uuidString.lowercased())"
+            projectTasks = Self.reidentifiedTasks(projectTasks, listId: sharedProject.id)
+        }
+        let created = try manager.createShared(project: sharedProject, tasks: projectTasks)
+        sharedProject.isShared = true
+        if sharedProject.id != projectId {
+            replaceLocalProject(projectId, with: sharedProject, tasks: projectTasks,
+                                retireOldProject: true)
+        }
 
         // Best-effort publish to the user's main doc so their other
         // devices auto-learn the key via main-doc sync. Skipped (not
@@ -739,22 +752,59 @@ final class TaskStore: ObservableObject {
         // on each of their devices manually. The Settings UI gates
         // sharing on passphrase setup to avoid surprising users.
         if let masterK = MasterKey.shared.currentKey {
-            try? persistence?.publishShareKey(projectId: projectId,
+            try? persistence?.publishShareKey(projectId: sharedProject.id,
                                               key: created.key,
                                               masterKey: masterK)
         }
 
-        // Local main-doc cleanup: flag the project shared, tombstone
-        // its tasks so the main doc no longer carries them. Snapshot
-        // first so the whole promotion is one undo unit.
-        snapshot()
+        // Keep tasks visible in the union snapshot. Persistence moves their
+        // storage to the shared doc and cleans up only the main-doc copies.
+        // Routing ordinary task deletions here would tombstone the new shared
+        // copies as soon as the promotion's debounced save runs.
         if let idx = projects.firstIndex(where: { $0.id == projectId }) {
             projects[idx].isShared = true
         }
-        for t in projectTasks { markTaskDeleted(t.id) }
-        tasks.removeAll { $0.list == projectId }
 
-        return ShareLink.encode(projectId: projectId, key: created.key)
+        return ShareLink.encode(projectId: sharedProject.id, key: created.key)
+    }
+
+    /// Demo tasks also have identical ids across accounts. Preserve nesting
+    /// when moving a colliding list so the union cannot deduplicate its tasks.
+    private static func reidentifiedTasks(_ tasks: [TaskItem], listId: String) -> [TaskItem] {
+        let ids = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, TaskItem.newID()) })
+        return tasks.map { task in
+            var copy = task
+            copy.id = ids[task.id]!
+            copy.list = listId
+            copy.parent = task.parent.map { ids[$0] ?? $0 }
+            return copy
+        }
+    }
+
+    private func replaceLocalProject(_ oldId: String, with project: ProjectItem,
+                                     tasks replacements: [TaskItem], retireOldProject: Bool) {
+        // Publish one complete snapshot. Cleanup must target the private doc,
+        // even if an invitation is about to register oldId as a shared store.
+        isApplyingDiskState = true
+        let oldTasks = tasks.filter { $0.list == oldId }
+        for task in oldTasks { pendingTaskDeletes[task.id] = "" }
+        if retireOldProject { markProjectDeleted(oldId) }
+        if let index = projects.firstIndex(where: { $0.id == oldId }) {
+            projects[index] = project
+        }
+        tasks.removeAll { $0.list == oldId }
+        tasks.append(contentsOf: replacements)
+        if activeSelection == .list(oldId) { activeSelection = .list(project.id) }
+        if let selected = selectedTaskId,
+           let index = oldTasks.firstIndex(where: { $0.id == selected }) {
+            selectedTaskId = replacements[index].id
+        }
+        editingTaskId = nil
+        // Old undo snapshots reference the retired ids and could restore
+        // private tasks into the newly joined shared list.
+        history.removeAll()
+        isApplyingDiskState = false
+        scheduleSave()
     }
 
     /// Accept an incoming `todarchy://share/...` link: persist the key
@@ -782,6 +832,15 @@ final class TaskStore: ObservableObject {
     @MainActor
     func acceptPayload(_ payload: ShareLink.Payload,
                        manager: SharedProjectManager) throws -> ProjectItem {
+        // A matching id alone does not establish that this is the same list.
+        // Never overwrite a different shared list's key or publish its tasks
+        // into an unrelated invitation's document.
+        if let existing = projects.first(where: { $0.id == payload.projectId }),
+           existing.isShared,
+           let key = manager.keyStore.load(for: payload.projectId), key != payload.key {
+            throw ShareError.conflictingInvitation
+        }
+
         // Persist key + prepare a store handle. The file itself might
         // not be on disk yet — Dropbox may still be downloading — but
         // accept() doesn't require it.
@@ -790,6 +849,16 @@ final class TaskStore: ObservableObject {
             store = try manager.accept(payload: payload)
         } catch {
             throw ShareError.keyPersistenceFailed(error.localizedDescription)
+        }
+
+        // An older invitation can collide with a renamed starter list.
+        // Preserve that private list separately before joining the sender's.
+        if var local = projects.first(where: { $0.id == payload.projectId && !$0.isShared }) {
+            local.id = "p_\(UUID().uuidString.lowercased())"
+            let moved = Self.reidentifiedTasks(tasks.filter { $0.list == payload.projectId },
+                                               listId: local.id)
+            replaceLocalProject(payload.projectId, with: local, tasks: moved,
+                                retireOldProject: false)
         }
 
         // Propagate the freshly-accepted key into the user's main

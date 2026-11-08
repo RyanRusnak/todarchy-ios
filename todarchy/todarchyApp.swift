@@ -129,6 +129,7 @@ struct TodarchyApp: App {
             store.activeSelection = .list(project.id)
             store.activeContextFilter = nil
         } catch {
+            SyncSettings.shared.shareLinkAlert = error.localizedDescription
             #if DEBUG
             print("todarchy: couldn't accept share link: \(error.localizedDescription)")
             #endif
@@ -142,7 +143,7 @@ struct RootView: View {
     var body: some View {
         platformRoot
             .alert(
-                "Sync Required",
+                "Project Sharing",
                 isPresented: Binding(
                     get: { syncSettings.shareLinkAlert != nil },
                     set: { if !$0 { syncSettings.shareLinkAlert = nil } }

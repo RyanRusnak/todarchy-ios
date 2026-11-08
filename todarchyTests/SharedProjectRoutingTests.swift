@@ -31,6 +31,123 @@ final class SharedProjectRoutingTests: XCTestCase {
         return p
     }
 
+    func testInviteDoesNotUploadPlaceholderBeforeFirstDownload() throws {
+        let key = CryptoBox.generateKey()
+        let pid = "p_invite"
+        try keyStore.save(key, for: pid)
+        let placeholder = ProjectItem(id: pid, name: "shared project", icon: "person.2.fill",
+                                      accent: .orange, isShared: true)
+        let p = makePersistence()
+        p.saveNow(.init(tasks: [], projects: [placeholder]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.fileURL(for: pid).path),
+                       "Joining must not publish an empty doc over the owner's relay copy")
+
+        // An offline edit while waiting must survive the initial download.
+        let bread = TaskItem(list: pid, title: "bread", pos: Date())
+        p.saveNow(.init(tasks: [bread], projects: [placeholder]))
+        XCTAssertEqual(p.load()?.tasks.map(\.id), [bread.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.fileURL(for: pid).path))
+
+        let restarted = makePersistence()
+        XCTAssertEqual(restarted.load()?.tasks.map(\.id), [bread.id],
+                       "Edits waiting for the first download must survive restart")
+        let ownerURL = syncFolder.appendingPathComponent("owner.automerge.enc")
+        let owner = PerProjectStore(fileURL: ownerURL, projectId: pid, key: key)
+        let groceries = ProjectItem(id: pid, name: "Groceries", icon: "cart", accent: .orange,
+                                    isShared: true)
+        let milk = TaskItem(list: pid, title: "milk", pos: Date())
+        try owner.save(.init(tasks: [milk], project: groceries))
+        try FileManager.default.copyItem(at: ownerURL, to: manager.fileURL(for: pid))
+        // Flush a UI snapshot still carrying the pre-download placeholder.
+        p.saveNow(.init(tasks: [bread], projects: [placeholder]))
+        XCTAssertEqual(p.load()?.projects.first?.name, "Groceries")
+        XCTAssertEqual(Set(p.load()!.tasks.map(\.id)), Set([milk.id, bread.id]))
+        let reopened = try XCTUnwrap(manager.openStore(for: pid))
+        XCTAssertEqual(try reopened.readSnapshot().project.name, "Groceries")
+        XCTAssertEqual(Set(try reopened.readSnapshot().tasks.map(\.id)), Set([milk.id, bread.id]))
+    }
+
+    func testServerInviteDownloadsSharedListWithoutSharingPrivateLists() async throws {
+        MockURLProtocol.reset()
+        defer { MockURLProtocol.reset() }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+
+        let pid = "p_server_groceries"
+        let key = CryptoBox.generateKey()
+        let ownerURL = syncFolder.appendingPathComponent("owner.enc")
+        let owner = PerProjectStore(fileURL: ownerURL, projectId: pid, key: key)
+        let groceries = ProjectItem(id: pid, name: "Groceries", icon: "cart", accent: .orange,
+                                    isShared: true)
+        let milk = TaskItem(list: pid, title: "milk", pos: Date())
+        try owner.save(.init(tasks: [milk], project: groceries))
+        let envelope = try Data(contentsOf: ownerURL)
+        MockURLProtocol.stub(path: "/doc/recipient_private", method: "GET") { _ in
+            MockResponse(status: 404, headers: [:], body: Data())
+        }
+        MockURLProtocol.stub(path: "/doc/recipient_private", method: "PUT") { _ in
+            MockResponse(status: 204, headers: [:], body: Data())
+        }
+        MockURLProtocol.stub(path: "/doc/\(pid)", method: "GET") { request in
+            if request.value(forHTTPHeaderField: "If-None-Match") == "owner-v1" {
+                return MockResponse(status: 304, headers: [:], body: Data())
+            }
+            return MockResponse(status: 200, headers: ["ETag": "owner-v1"], body: envelope)
+        }
+        MockURLProtocol.stub(path: "/doc/\(pid)", method: "PUT") { _ in
+            MockResponse(status: 204, headers: [:], body: Data())
+        }
+
+        let p = makePersistence()
+        let privateList = ProjectItem(id: "p_private", name: "Private", icon: "folder", accent: .blue)
+        let privateTask = TaskItem(list: privateList.id, title: "private task", pos: Date())
+        p.saveNow(.init(tasks: [privateTask], projects: [privateList]))
+        let ui = TaskStore(persistence: p)
+        _ = try ui.acceptPayload(.init(projectId: pid, key: key), manager: manager)
+        // Flush the invite before connecting so the reader is registered.
+        XCTAssertTrue(p.syncNow().success)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.fileURL(for: pid).path))
+        p.serverClient = ServerSyncClient(baseURL: URL(string: "https://mock.example.com")!, session: session)
+        p.serverMainDocId = "recipient_private"
+        // Reproduce the live Mac failure: the HTTP response was cached, but
+        // its contents never reached the placeholder store. The next sync
+        // must request the full document instead of accepting 304 forever.
+        p.serverClient?.setCachedETag("owner-v1", for: pid)
+        let result = await Task.detached { p.syncNow() }.value
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(result.taskCount, 2, "Sync status must include shared tasks")
+        XCTAssertEqual(p.load()?.projects.first(where: { $0.id == pid })?.name, "Groceries")
+        XCTAssertEqual(Set(p.load()!.tasks.map(\.id)), Set([privateTask.id, milk.id]))
+
+        // A manual download must be durable before the next poll or edit.
+        let received = try XCTUnwrap(manager.openStore(for: pid))
+        XCTAssertEqual(try received.readSnapshot().tasks.map(\.id), [milk.id])
+        XCTAssertEqual(try received.readSnapshot().project.name, "Groceries")
+        let main = AutomergeStore(data: try Data(contentsOf: mainFile))
+        XCTAssertEqual(try main.snapshot().tasks.map(\.id), [privateTask.id])
+    }
+
+    func testReplacingInvitationKeyReopensLiveStore() throws {
+        let pid = "p_rekey"
+        let project = ProjectItem(id: pid, name: "Shared", icon: "cart", accent: .orange, isShared: true)
+        _ = try manager.createShared(project: project, tasks: [])
+        let p = makePersistence()
+        p.saveNow(.init(tasks: [], projects: [project]))
+        XCTAssertEqual(p.load()?.tasks.count, 0)
+
+        let currentKey = CryptoBox.generateKey()
+        let ownerURL = syncFolder.appendingPathComponent("current-owner.enc")
+        let owner = PerProjectStore(fileURL: ownerURL, projectId: pid, key: currentKey)
+        let task = TaskItem(list: pid, title: "Newly accessible", pos: Date())
+        try owner.save(.init(tasks: [task], project: project))
+        try Data(contentsOf: ownerURL).write(to: manager.fileURL(for: pid), options: .atomic)
+        try keyStore.save(currentKey, for: pid)
+        XCTAssertEqual(p.load()?.tasks.map(\.id), [task.id],
+                       "A running reader must adopt a replacement invitation key")
+    }
+
     // MARK: - Union load
 
     func testLoadUnionsMainDocAndSharedStore() throws {

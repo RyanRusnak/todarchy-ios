@@ -6,6 +6,13 @@ import XCTest
 @MainActor
 final class SyncSettingsSharingTests: XCTestCase {
 
+    func testSharingAndKeyPropagationUseTheSameKeyCache() {
+        let settings = SyncSettings()
+        XCTAssertTrue((settings.keyStore as? KeychainKeyStore) ===
+                      (ShareKeysSync.shared.keyStore as? KeychainKeyStore),
+                      "Imported share keys must be visible to the list reader immediately")
+    }
+
     // We can't safely reuse `SyncSettings.shared` across tests because
     // it touches UserDefaults + bookmark state. Construct fresh
     // SyncSettings-like scaffolding by driving the settings directly.

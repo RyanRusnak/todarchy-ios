@@ -65,7 +65,7 @@ final class SyncSettings: ObservableObject {
     @Published private(set) var sharedProjectManager: SharedProjectManager?
 
     /// Swappable for tests.
-    var keyStore: KeyStore = KeychainKeyStore()
+    var keyStore: KeyStore = KeychainKeyStore.shared
 
     enum ServerHealth: Equatable {
         case unknown
